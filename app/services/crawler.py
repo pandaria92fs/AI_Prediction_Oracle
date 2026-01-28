@@ -193,6 +193,10 @@ async def process_batch_task(crawler, offset, semaphore):
     """单个批次任务"""
     async with semaphore:
         data = await crawler.fetch_page(limit=50, offset=offset)
+        
+        # 👇 加这行日志
+        print(f"📄 Offset {offset}: 抓到 {len(data)} 条数据")
+        
         if not data:
             return 0
         await crawler.save_batch(data)

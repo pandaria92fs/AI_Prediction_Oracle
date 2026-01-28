@@ -1,9 +1,10 @@
 """FastAPI 应用主入口"""
-from fastapi import FastAPI
+from fastapi import BackgroundTasks, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.endpoints import cards
 from app.core.config import settings
+from app.services.crawler import run_batch_crawl
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -51,3 +52,20 @@ async def root():
 async def health():
     """健康检查"""
     return {"status": "healthy"}
+
+
+@app.post("/api/admin/trigger-update")
+async def trigger_update(background_tasks: BackgroundTasks, secret: str):
+    """
+    触发后台爬虫更新任务
+    
+    - **secret**: 密码保护（防止未授权访问）
+    """
+    # 简单的密码保护，防止路人乱点
+    if secret != "my_super_secret_password":
+        return {"error": "密码错误"}
+
+    # 将爬虫任务加入后台队列
+    background_tasks.add_task(run_batch_crawl)
+
+    return {"message": "已触发后台更新任务，请稍后查看日志"}
