@@ -47,13 +47,21 @@ config.set_main_option("sqlalchemy.url", db_url)
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# 导入 Base
-try:
-    from app.db.base import Base
-except ImportError:
-    from app.models import Base
+# -------------------- [ 模型导入 ] --------------------
+# 1. 从【定义它的地方】直接导入 Base，而不是从 app.models
+from app.db.base import Base
 
+# 2. 显式导入所有模型类
+# 这一步非常关键！只有导入了它们，Base.metadata 才能感知到表的存在
+from app.models.event_card import EventCard
+from app.models.event_snapshot import EventSnapshot
+from app.models.tag import Tag
+from app.models.card_tag import CardTag
+from app.models.ai_prediction import AIPrediction
+
+# 3. 设置 target_metadata
 target_metadata = Base.metadata
+# -------------------- [ 模型导入结束 ] --------------------
 
 def run_migrations_offline() -> None:
     url = config.get_main_option("sqlalchemy.url")
