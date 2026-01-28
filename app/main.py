@@ -89,7 +89,8 @@ async def get_cards(
     # 使用 PostgreSQL 的 JSONB 查询：检查 tags 数组中是否有 id 匹配的元素
     if tag_id:
         # JOIN EventSnapshot 表，并使用 JSONB 查询条件
-        # 检查 raw_data->'tags' 数组中是否有 id 等于 tag_id 的元素
+        # 检查 raw_data->'tags' 数组中是否有任何一个 tag 的 id 等于传入的 tag_id
+        # 注意：tags 是一个数组，每个元素是 {id, label, slug, ...} 对象
         query = query.join(
             EventSnapshot,
             EventCard.polymarket_id == EventSnapshot.polymarket_id
