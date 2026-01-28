@@ -110,8 +110,8 @@ class CardData(BaseModel):
     endDate: Optional[str] = None
     createdAt: Optional[datetime] = None
     updatedAt: Optional[datetime] = None
-    # 预留 AI 分析字段，方便后续扩展
-    ai_analysis: Optional[str] = None
+    # AI 分析摘要（从 ai_predictions 表获取）
+    aiLogicSummary: Optional[str] = None
 
     tags: List[TagItem] = []
     markets: List[MarketItem] = []

@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.decorators import profile_endpoint
 from app.db.session import get_db
+from app.models.ai_prediction import AIPrediction
 from app.models.card_tag import card_tags
 from app.models.event_card import EventCard
 from app.models.event_snapshot import EventSnapshot
@@ -59,7 +60,7 @@ def _extract_tags_from_raw_data(raw_data: dict) -> list:
     return result
 
 
-def _build_card_data(card: EventCard, snapshot: Optional[EventSnapshot] = None) -> dict:
+def _build_card_data(card: EventCard, snapshot: Optional[EventSnapshot] = None, predictions: Optional[list] = None) -> dict:
     """构建卡片数据对象"""
     raw_data = snapshot.raw_data if snapshot else {}
     
@@ -72,6 +73,12 @@ def _build_card_data(card: EventCard, snapshot: Optional[EventSnapshot] = None) 
             return date_value
         # 如果是 datetime 对象，转换为 ISO 格式
         return date_value.isoformat() if hasattr(date_value, 'isoformat') else str(date_value)
+    
+    # 获取 aiLogicSummary（从最新的 prediction 中提取）
+    ai_logic_summary = None
+    if predictions and len(predictions) > 0:
+        # predictions 应该按 created_at 降序排序，取第一个
+        ai_logic_summary = predictions[0].summary
     
     # 基础字段从 EventCard 获取，但优先使用 raw_data 中的最新值
     # 修复：icon 字段映射 - 使用 validation_alias，所以这里用 image_url
@@ -91,7 +98,7 @@ def _build_card_data(card: EventCard, snapshot: Optional[EventSnapshot] = None) 
         "updatedAt": card.updated_at.isoformat() if card.updated_at else None,  # 修复：添加 updatedAt
         "tags": _extract_tags_from_raw_data(raw_data),
         "markets": _extract_markets_from_raw_data(raw_data),
-        "ai_analysis": None,  # 预留字段，当前为 None
+        "aiLogicSummary": ai_logic_summary,  # AI 分析摘要
     }
     return card_dict
 
@@ -125,6 +132,7 @@ async def get_card_list(
             select(EventCard)
             .options(
                 selectinload(EventCard.tags),
+                selectinload(EventCard.predictions),  # 预加载 AI 预测，用于获取 aiLogicSummary
                 # 目前 markets 来源于 EventSnapshot.raw_data，这里没有 ORM 关系可预加载
                 # 如未来为 Market 建表并建立关系，可在此添加 selectinload(EventCard.markets)
             )
@@ -235,7 +243,8 @@ async def get_card_list(
                         raw_data=snapshot_data["raw_data"],
                         created_at=snapshot_data["created_at"],
                     )
-                card_dict = _build_card_data(card, snapshot)
+                # 传入 predictions（已通过 selectinload 预加载，按 created_at 降序排序）
+                card_dict = _build_card_data(card, snapshot, card.predictions)
                 card_data_list.append(card_dict)
             t_build_end = time.perf_counter()
             print(f"🔄 [Step 3] Snapshot 批量查询: {(t_build_start - t_snap_start) * 1000:.2f}ms")
@@ -293,8 +302,12 @@ async def get_card_details(
     - **id**: Polymarket Event ID（对应 EventCard.polymarket_id）
     """
     try:
-        # 查询 EventCard
-        card_query = select(EventCard).where(EventCard.polymarket_id == id)
+        # 查询 EventCard，预加载 predictions
+        card_query = (
+            select(EventCard)
+            .options(selectinload(EventCard.predictions))
+            .where(EventCard.polymarket_id == id)
+        )
         card_result = await db.execute(card_query)
         card = card_result.scalar_one_or_none()
 
@@ -311,7 +324,7 @@ async def get_card_details(
         snapshot_result = await db.execute(snapshot_query)
         snapshot = snapshot_result.scalar_one_or_none()
 
-        card_dict = _build_card_data(card, snapshot)
+        card_dict = _build_card_data(card, snapshot, card.predictions)
 
         return CardDetailsResponse(
             code=200,
