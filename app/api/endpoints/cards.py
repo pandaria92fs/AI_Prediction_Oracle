@@ -131,13 +131,13 @@ async def get_card_list(
             .where(EventCard.is_active == True)
         )
 
-        # 标签过滤
+        # 标签过滤（使用 Polymarket 原始 tag id）
         if tagId:
             base_query = base_query.join(
                 card_tags, EventCard.id == card_tags.c.card_id
             ).join(
                 Tag, card_tags.c.tag_id == Tag.id
-            ).where(Tag.id == int(tagId))
+            ).where(Tag.polymarket_id == str(tagId))
         t_query_build_end = time.perf_counter()
         print(f"📋 [Step 0] 查询构建耗时: {(t_query_build_end - t_query_build_start) * 1000:.2f}ms")
 
@@ -152,7 +152,7 @@ async def get_card_list(
                 .join(card_tags, EventCard.id == card_tags.c.card_id)
                 .join(Tag, card_tags.c.tag_id == Tag.id)
                 .where(EventCard.is_active == True)
-                .where(Tag.id == int(tagId))
+                .where(Tag.polymarket_id == str(tagId))
             )
         else:
             # 无过滤：直接计数，最简单最快

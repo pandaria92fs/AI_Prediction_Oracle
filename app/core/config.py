@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     
     # 其他配置
     DEBUG: bool = False
+    
+    # 管理员密钥（用于触发爬虫等敏感操作）
+    ADMIN_SECRET_KEY: str = "change_me_in_production"
 
     model_config = SettingsConfigDict(
         env_file=".env",

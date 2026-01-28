@@ -15,7 +15,15 @@ class Tag(Base):
     __tablename__ = "tags"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    # Polymarket 原始标签 ID（字符串形式，例如 "100196"、"2"）
+    polymarket_id: Mapped[str] = mapped_column(
+        String(50),
+        unique=True,
+        nullable=False,
+        index=True,
+    )
+    # 存储 Polymarket 的 slug（如 "politics"）
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
 
     cards: Mapped[List["EventCard"]] = relationship(
         "EventCard",

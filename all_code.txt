@@ -1,0 +1,1912 @@
+
+
+================================================================================
+FILE: verify_api.py
+================================================================================
+
+"""API 响应结构验证脚本"""
+import sys
+from typing import Any, Dict, Optional
+
+import httpx
+
+
+class Colors:
+    """终端颜色"""
+    GREEN = "\033[92m"
+    RED = "\033[91m"
+    YELLOW = "\033[93m"
+    RESET = "\033[0m"
+
+
+def print_pass(message: str):
+    """打印通过信息"""
+    print(f"{Colors.GREEN}✅ PASS{Colors.RESET}: {message}")
+
+
+def print_fail(message: str):
+    """打印失败信息"""
+    print(f"{Colors.RED}❌ FAIL{Colors.RESET}: {message}")
+
+
+def print_info(message: str):
+    """打印信息"""
+    print(f"{Colors.YELLOW}ℹ️  INFO{Colors.RESET}: {message}")
+
+
+def test_list_endpoint(base_url: str) -> Optional[str]:
+    """
+    测试 GET /card/list 端点
+    
+    Returns:
+        返回第一个卡片的 ID（用于后续测试），如果失败返回 None
+    """
+    print("\n" + "=" * 60)
+    print("测试 1: GET /card/list")
+    print("=" * 60)
+
+    url = f"{base_url}/card/list"
+    params = {"page": 1, "pageSize": 10}
+
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            response = client.get(url, params=params)
+            response.raise_for_status()
+
+            # 断言 1: 状态码为 200
+            if response.status_code != 200:
+                print_fail(f"状态码应为 200，实际为 {response.status_code}")
+                return None
+            print_pass(f"状态码: {response.status_code}")
+
+            # 解析 JSON
+            data = response.json()
+
+            # 断言 2: 响应结构匹配
+            if "code" not in data or "message" not in data or "data" not in data:
+                print_fail("响应缺少必要字段: code, message, data")
+                return None
+            print_pass("响应包含 code, message, data 字段")
+
+            if data["code"] != 200:
+                print_fail(f"code 应为 200，实际为 {data['code']}")
+                return None
+            print_pass(f"code: {data['code']}")
+
+            # 断言 3: data 结构匹配 { total, page, pageSize, list }
+            data_payload = data["data"]
+            required_fields = ["total", "page", "pageSize", "list"]
+            missing_fields = [f for f in required_fields if f not in data_payload]
+
+            if missing_fields:
+                print_fail(f"data 缺少字段: {missing_fields}")
+                return None
+            print_pass(f"data 包含所有必需字段: {required_fields}")
+
+            # 验证字段类型
+            if not isinstance(data_payload["total"], int):
+                print_fail(f"total 应为 int，实际为 {type(data_payload['total'])}")
+                return None
+            print_pass(f"total 类型正确: {type(data_payload['total']).__name__}")
+
+            if not isinstance(data_payload["list"], list):
+                print_fail(f"list 应为 list，实际为 {type(data_payload['list'])}")
+                return None
+            print_pass(f"list 类型正确: {type(data_payload['list']).__name__}")
+
+            # 断言 4: 检查列表项中的字段
+            if len(data_payload["list"]) == 0:
+                print_info("列表为空，跳过字段检查")
+                return None
+
+            first_item = data_payload["list"][0]
+
+            # 检查 icon 字段（重命名自 imageUrl）
+            if "icon" not in first_item:
+                print_fail("列表项缺少 'icon' 字段")
+                return None
+            print_pass("列表项包含 'icon' 字段")
+
+            # 检查 markets 字段
+            if "markets" not in first_item:
+                print_fail("列表项缺少 'markets' 字段")
+                return None
+            if not isinstance(first_item["markets"], list):
+                print_fail(f"markets 应为 list，实际为 {type(first_item['markets'])}")
+                return None
+            print_pass("列表项包含 'markets' 字段（类型为 list）")
+
+            # 检查 markets 中的 probability 字段
+            if len(first_item["markets"]) > 0:
+                first_market = first_item["markets"][0]
+                if "probability" not in first_market:
+                    print_fail("market 项缺少 'probability' 字段")
+                    return None
+                if not isinstance(first_market["probability"], (int, float)):
+                    print_fail(
+                        f"probability 应为数字，实际为 {type(first_market['probability'])}"
+                    )
+                    return None
+                print_pass(
+                    f"market 项包含 'probability' 字段: {first_market['probability']}"
+                )
+
+            # 获取第一个卡片的 ID 用于后续测试
+            card_id = first_item.get("id")
+            if not card_id:
+                print_fail("列表项缺少 'id' 字段")
+                return None
+            print_pass(f"获取到第一个卡片 ID: {card_id}")
+
+            print_info(f"列表总数: {data_payload['total']}")
+            print_info(f"当前页: {data_payload['page']}")
+            print_info(f"每页数量: {data_payload['pageSize']}")
+            print_info(f"当前页项目数: {len(data_payload['list'])}")
+
+            return card_id
+
+    except httpx.HTTPStatusError as e:
+        print_fail(f"HTTP 错误: {e.response.status_code} - {e.response.text}")
+        return None
+    except httpx.RequestError as e:
+        print_fail(f"请求错误: {str(e)}")
+        return None
+    except Exception as e:
+        print_fail(f"未预期的错误: {str(e)}")
+        return None
+
+
+def test_details_endpoint(base_url: str, card_id: str):
+    """
+    测试 GET /card/details 端点
+    
+    Args:
+        base_url: API 基础 URL
+        card_id: 卡片 ID
+    """
+    print("\n" + "=" * 60)
+    print("测试 2: GET /card/details")
+    print("=" * 60)
+
+    url = f"{base_url}/card/details"
+    params = {"id": card_id}
+
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            response = client.get(url, params=params)
+            response.raise_for_status()
+
+            # 断言 1: 状态码为 200
+            if response.status_code != 200:
+                print_fail(f"状态码应为 200，实际为 {response.status_code}")
+                return
+            print_pass(f"状态码: {response.status_code}")
+
+            # 解析 JSON
+            data = response.json()
+
+            # 断言 2: 响应结构匹配
+            if "code" not in data or "message" not in data or "data" not in data:
+                print_fail("响应缺少必要字段: code, message, data")
+                return
+            print_pass("响应包含 code, message, data 字段")
+
+            if data["code"] != 200:
+                print_fail(f"code 应为 200，实际为 {data['code']}")
+                return
+            print_pass(f"code: {data['code']}")
+
+            # 断言 3: data 结构匹配 { id: str, ... }
+            card_data = data["data"]
+
+            if "id" not in card_data:
+                print_fail("data 缺少 'id' 字段")
+                return
+            if not isinstance(card_data["id"], str):
+                print_fail(f"id 应为 str，实际为 {type(card_data['id'])}")
+                return
+            print_pass(f"data 包含 'id' 字段: {card_data['id']}")
+
+            # 断言 4: 检查 ai_analysis 字段（可以为 None）
+            if "ai_analysis" not in card_data:
+                print_fail("data 缺少 'ai_analysis' 字段")
+                return
+            print_pass(
+                f"data 包含 'ai_analysis' 字段: {card_data.get('ai_analysis', 'None')}"
+            )
+
+            # 断言 5: 检查 createdAt 字段
+            if "createdAt" not in card_data:
+                print_fail("data 缺少 'createdAt' 字段")
+                return
+            print_pass(f"data 包含 'createdAt' 字段: {card_data.get('createdAt')}")
+
+            print_info(f"卡片标题: {card_data.get('title', 'N/A')}")
+            print_info(f"卡片 slug: {card_data.get('slug', 'N/A')}")
+
+    except httpx.HTTPStatusError as e:
+        print_fail(f"HTTP 错误: {e.response.status_code} - {e.response.text}")
+    except httpx.RequestError as e:
+        print_fail(f"请求错误: {str(e)}")
+    except Exception as e:
+        print_fail(f"未预期的错误: {str(e)}")
+
+
+def main():
+    """主函数"""
+    # 配置
+    base_url = "http://127.0.0.1:8000"
+
+    # 如果提供了命令行参数，使用它作为 base_url
+    if len(sys.argv) > 1:
+        base_url = sys.argv[1]
+
+    print(f"\n🚀 开始验证 API 响应结构")
+    print(f"📍 目标 URL: {base_url}")
+
+    # 测试 1: List 端点
+    card_id = test_list_endpoint(base_url)
+
+    # 测试 2: Details 端点（如果 List 测试成功）
+    if card_id:
+        test_details_endpoint(base_url, card_id)
+    else:
+        print_fail("跳过 Details 测试（List 测试失败）")
+
+    print("\n" + "=" * 60)
+    print("✅ 验证完成")
+    print("=" * 60 + "\n")
+
+
+if __name__ == "__main__":
+    main()
+
+
+================================================================================
+FILE: stitch_code.py
+================================================================================
+
+import os
+
+OUTPUT_FILE = "all_code.txt"
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+# 简单忽略这些目录
+IGNORE_DIRS = {".git", ".venv", "venv", "__pycache__", ".cursor"}
+
+# 认为是“代码文件”的后缀（可按需增减）
+CODE_EXTS = {".py", ".sql", ".js", ".ts", ".tsx", ".json", ".yml", ".yaml"}
+
+with open(os.path.join(PROJECT_ROOT, OUTPUT_FILE), "w", encoding="utf-8") as out:
+    for root, dirs, files in os.walk(PROJECT_ROOT):
+        # 过滤掉不想遍历的目录
+        dirs[:] = [d for d in dirs if d not in IGNORE_DIRS]
+
+        for name in files:
+            _, ext = os.path.splitext(name)
+            if ext not in CODE_EXTS:
+                continue
+
+            path = os.path.join(root, name)
+            rel_path = os.path.relpath(path, PROJECT_ROOT)
+
+            out.write("\n\n" + "=" * 80 + "\n")
+            out.write(f"FILE: {rel_path}\n")
+            out.write("=" * 80 + "\n\n")
+
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    out.write(f.read())
+            except Exception as e:
+                out.write(f"<<无法读取文件 {rel_path}: {e}>>\n")
+
+================================================================================
+FILE: migrations/env.py
+================================================================================
+
+import asyncio
+from logging.config import fileConfig
+import sys
+from pathlib import Path
+import os
+from dotenv import load_dotenv # 确保引入
+
+from sqlalchemy import pool
+from sqlalchemy.engine import Connection
+from sqlalchemy.ext.asyncio import async_engine_from_config
+from alembic import context
+
+# 1. 路径设置
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# 2. 强制加载 .env
+load_dotenv()
+
+# 读取配置
+config = context.config
+
+# 3. 获取 URL
+db_url = os.environ.get("DATABASE_URL")
+
+# --- 🔍 调试打印 (关键) ---
+print(f"-------------- DEBUG INFO --------------")
+print(f"原始 URL: {db_url}")
+
+if not db_url:
+    raise ValueError("❌ Error: DATABASE_URL is missing in .env!")
+
+# 4. 暴力修复逻辑 (不管开头是 postgres 还是 postgresql，统统加驱动)
+if "asyncpg" not in db_url:
+    print("⚠️ 检测到 URL 缺少驱动，正在尝试自动修复...")
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql+asyncpg://", 1)
+    elif db_url.startswith("postgresql://"):
+        db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+print(f"最终 URL: {db_url}")
+print(f"----------------------------------------")
+
+# 设置给 Alembic
+config.set_main_option("sqlalchemy.url", db_url)
+
+# 日志配置
+if config.config_file_name is not None:
+    fileConfig(config.config_file_name)
+
+# 导入 Base
+try:
+    from app.db.base import Base
+except ImportError:
+    from app.models import Base
+
+target_metadata = Base.metadata
+
+def run_migrations_offline() -> None:
+    url = config.get_main_option("sqlalchemy.url")
+    context.configure(
+        url=url,
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
+    )
+    with context.begin_transaction():
+        context.run_migrations()
+
+def do_run_migrations(connection: Connection) -> None:
+    context.configure(connection=connection, target_metadata=target_metadata)
+    with context.begin_transaction():
+        context.run_migrations()
+
+async def run_async_migrations() -> None:
+    connectable = async_engine_from_config(
+        config.get_section(config.config_ini_section, {}),
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
+    async with connectable.connect() as connection:
+        await connection.run_sync(do_run_migrations)
+    await connectable.dispose()
+
+def run_migrations_online() -> None:
+    asyncio.run(run_async_migrations())
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    run_migrations_online()
+
+================================================================================
+FILE: migrations/add_performance_indexes.sql
+================================================================================
+
+-- =====================================================
+-- 性能优化索引创建脚本
+-- 在 Supabase SQL Editor 中执行此脚本
+-- =====================================================
+
+-- 1. event_snapshots(polymarket_id) 索引（关键：修复 10s 延迟）
+-- 注意：如果已有复合索引，这个单列索引可能不是必需的，但可以加速单列查询
+CREATE INDEX IF NOT EXISTS idx_event_snapshots_polymarket_id 
+ON event_snapshots(polymarket_id);
+
+-- 2. event_cards(is_active) 索引（用于过滤活跃卡片）
+CREATE INDEX IF NOT EXISTS idx_event_cards_is_active 
+ON event_cards(is_active) 
+WHERE is_active = true;  -- 部分索引，只索引活跃的卡片
+
+-- 3. event_cards(volume) 索引（用于排序）
+CREATE INDEX IF NOT EXISTS idx_event_cards_volume 
+ON event_cards(volume DESC NULLS LAST);
+
+-- 4. 复合索引：is_active + volume（优化常见查询模式）
+CREATE INDEX IF NOT EXISTS idx_event_cards_active_volume 
+ON event_cards(is_active, volume DESC NULLS LAST) 
+WHERE is_active = true;
+
+-- 5. 优化 event_snapshots 的复合索引（如果不存在）
+-- 用于 DISTINCT ON 查询：按 polymarket_id 分组，取最新的 created_at
+CREATE INDEX IF NOT EXISTS idx_event_snapshots_polymarket_created 
+ON event_snapshots(polymarket_id, created_at DESC);
+
+-- =====================================================
+-- 验证索引是否创建成功
+-- =====================================================
+-- SELECT 
+--     schemaname,
+--     tablename,
+--     indexname,
+--     indexdef
+-- FROM pg_indexes
+-- WHERE tablename IN ('event_cards', 'event_snapshots')
+-- ORDER BY tablename, indexname;
+
+
+================================================================================
+FILE: migrations/versions/7c2b2efee74e_init_v2_architecture.py
+================================================================================
+
+"""init_v2_architecture
+
+Revision ID: 7c2b2efee74e
+Revises: 
+Create Date: 2026-01-27 14:52:53.943233
+
+"""
+from typing import Sequence, Union
+
+from alembic import op
+import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
+
+# revision identifiers, used by Alembic.
+revision: str = '7c2b2efee74e'
+down_revision: Union[str, Sequence[str], None] = None
+branch_labels: Union[str, Sequence[str], None] = None
+depends_on: Union[str, Sequence[str], None] = None
+
+
+def upgrade() -> None:
+    """Upgrade schema."""
+    # ### commands auto generated by Alembic - please adjust! ###
+    op.create_table('event_cards',
+    sa.Column('id', sa.BigInteger(), autoincrement=True, nullable=False),
+    sa.Column('polymarket_id', sa.String(length=50), nullable=False),
+    sa.Column('title', sa.String(length=500), nullable=False),
+    sa.Column('slug', sa.String(length=255), nullable=False),
+    sa.Column('description', sa.Text(), nullable=True),
+    sa.Column('image_url', sa.String(length=1000), nullable=True),
+    sa.Column('volume', sa.Numeric(precision=20, scale=2), nullable=True),
+    sa.Column('end_date', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('is_active', sa.Boolean(), server_default='true', nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_event_cards_polymarket_id'), 'event_cards', ['polymarket_id'], unique=True)
+    op.create_index(op.f('ix_event_cards_slug'), 'event_cards', ['slug'], unique=True)
+    op.create_table('event_snapshots',
+    sa.Column('id', sa.BigInteger(), autoincrement=True, nullable=False),
+    sa.Column('polymarket_id', sa.String(length=50), nullable=False),
+    sa.Column('raw_data', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_event_snapshots_polymarket_id'), 'event_snapshots', ['polymarket_id'], unique=False)
+    op.create_index('ix_event_snapshots_polymarket_id_created_at', 'event_snapshots', ['polymarket_id', 'created_at'], unique=False)
+    op.create_table('tags',
+    sa.Column('id', sa.BigInteger(), autoincrement=True, nullable=False),
+    sa.Column('name', sa.String(length=255), nullable=False),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('name')
+    )
+    op.create_table('ai_predictions',
+    sa.Column('id', sa.BigInteger(), autoincrement=True, nullable=False),
+    sa.Column('card_id', sa.BigInteger(), nullable=False),
+    sa.Column('summary', sa.Text(), nullable=False),
+    sa.Column('confidence_score', sa.Numeric(precision=5, scale=2), nullable=False),
+    sa.Column('outcome_prediction', sa.String(length=255), nullable=False),
+    sa.Column('raw_analysis', sa.Text(), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.ForeignKeyConstraint(['card_id'], ['event_cards.id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_ai_predictions_card_id'), 'ai_predictions', ['card_id'], unique=False)
+    op.create_index(op.f('ix_ai_predictions_created_at'), 'ai_predictions', ['created_at'], unique=False)
+    op.create_table('card_tags',
+    sa.Column('card_id', sa.BigInteger(), nullable=False),
+    sa.Column('tag_id', sa.BigInteger(), nullable=False),
+    sa.ForeignKeyConstraint(['card_id'], ['event_cards.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['tag_id'], ['tags.id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('card_id', 'tag_id')
+    )
+    # ### end Alembic commands ###
+
+
+def downgrade() -> None:
+    """Downgrade schema."""
+    # ### commands auto generated by Alembic - please adjust! ###
+    op.drop_table('card_tags')
+    op.drop_index(op.f('ix_ai_predictions_created_at'), table_name='ai_predictions')
+    op.drop_index(op.f('ix_ai_predictions_card_id'), table_name='ai_predictions')
+    op.drop_table('ai_predictions')
+    op.drop_table('tags')
+    op.drop_index('ix_event_snapshots_polymarket_id_created_at', table_name='event_snapshots')
+    op.drop_index(op.f('ix_event_snapshots_polymarket_id'), table_name='event_snapshots')
+    op.drop_table('event_snapshots')
+    op.drop_index(op.f('ix_event_cards_slug'), table_name='event_cards')
+    op.drop_index(op.f('ix_event_cards_polymarket_id'), table_name='event_cards')
+    op.drop_table('event_cards')
+    # ### end Alembic commands ###
+
+
+================================================================================
+FILE: app/__init__.py
+================================================================================
+
+"""AI Prediction Oracle Backend Application"""
+
+
+================================================================================
+FILE: app/main.py
+================================================================================
+
+"""FastAPI 应用主入口"""
+from typing import Optional
+
+from fastapi import BackgroundTasks, Depends, FastAPI, Query
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import bindparam, desc, select, text
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from app.api.endpoints import cards
+from app.core.config import settings
+from app.db.session import get_db
+from app.models.event_card import EventCard
+from app.models.event_snapshot import EventSnapshot
+from app.services.crawler import run_batch_crawl
+
+app = FastAPI(
+    title=settings.PROJECT_NAME,
+    version=settings.VERSION,
+    description="AI Prediction Oracle Backend API",
+)
+
+# CORS 配置 - 允许前端跨域访问
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 开发环境允许所有源
+    allow_credentials=True,
+    allow_methods=["*"],  # 允许所有 HTTP 方法
+    allow_headers=["*"],  # 必须是 "*" 或包含 "ngrok-skip-browser-warning"
+)
+
+# 注册路由
+# 路由路径: /card/list, /card/details
+app.include_router(
+    cards.router,
+    prefix="/card",
+    tags=["Cards"],
+)
+
+
+@app.on_event("startup")
+async def startup_event():
+    """应用启动事件"""
+    print("🚀 Polymarket Backend Ready")
+    print(f"📚 API Documentation: http://localhost:8000/docs")
+    print(f"🔍 ReDoc: http://localhost:8000/redoc")
+
+
+@app.get("/")
+async def root():
+    """根路径"""
+    return {
+        "message": "AI Prediction Oracle API",
+        "version": settings.VERSION,
+        "docs": "/docs",
+    }
+
+
+@app.get("/health")
+async def health():
+    """健康检查"""
+    return {"status": "healthy"}
+
+
+@app.get("/api/v1/cards")
+async def get_cards(
+    page: int = Query(1, ge=1, description="页码"),
+    pageSize: int = Query(20, ge=1, description="每页数量"),
+    tag_id: Optional[str] = Query(None, description="第三方标签 ID 过滤（Polymarket 的 tag id）"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取卡片列表（简化版）
+    
+    - **page**: 页码（从 1 开始）
+    - **pageSize**: 每页数量
+    - **tag_id**: 可选的第三方标签 ID 过滤（从 Polymarket API 的 raw_data.tags 中获取）
+    """
+    offset = (page - 1) * pageSize
+    
+    # 构建基础查询，预加载 predictions 关系
+    query = (
+        select(EventCard)
+        .options(selectinload(EventCard.predictions))
+        .where(EventCard.is_active == True)
+    )
+    
+    # 如果传了 tag_id，从 EventSnapshot 的 raw_data JSONB 中过滤
+    # 使用 PostgreSQL 的 JSONB 查询：检查 tags 数组中是否有 id 匹配的元素
+    if tag_id:
+        # JOIN EventSnapshot 表，并使用 JSONB 查询条件
+        # 检查 raw_data->'tags' 数组中是否有任何一个 tag 的 id 等于传入的 tag_id
+        # 注意：tags 是一个数组，每个元素是 {id, label, slug, ...} 对象
+        query = query.join(
+            EventSnapshot,
+            EventCard.polymarket_id == EventSnapshot.polymarket_id
+        ).where(
+            text("""
+                EXISTS (
+                    SELECT 1 
+                    FROM jsonb_array_elements(event_snapshots.raw_data->'tags') AS tag
+                    WHERE tag->>'id' = :tag_id
+                )
+            """).bindparams(bindparam("tag_id", tag_id))
+        ).distinct()
+    
+    # 加上分页和排序
+    query = query.offset(offset).limit(pageSize).order_by(desc(EventCard.created_at))
+    
+    result = await db.execute(query)
+    cards = result.scalars().all()
+    
+    # 转换为字典格式，包含 aiLogicSummary 字段
+    cards_data = []
+    for card in cards:
+        card_dict = {
+            "id": card.polymarket_id,
+            "slug": card.slug,
+            "title": card.title,
+            "description": card.description,
+            "image_url": card.image_url,
+            "volume": float(card.volume) if card.volume else None,
+            "end_date": card.end_date.isoformat() if card.end_date else None,
+            "is_active": card.is_active,
+            "created_at": card.created_at.isoformat() if card.created_at else None,
+            "updated_at": card.updated_at.isoformat() if card.updated_at else None,
+            "aiLogicSummary": None,  # 默认值
+        }
+        
+        # 从 predictions 中取最新的 summary 作为 aiLogicSummary
+        # predictions 已经按 created_at 降序排序，所以第一个就是最新的
+        if card.predictions and len(card.predictions) > 0:
+            latest_prediction = card.predictions[0]
+            card_dict["aiLogicSummary"] = latest_prediction.summary
+        
+        cards_data.append(card_dict)
+    
+    return cards_data
+
+
+@app.post("/api/admin/trigger-update")
+async def trigger_update(background_tasks: BackgroundTasks, secret: str):
+    """
+    触发后台爬虫更新任务
+    
+    - **secret**: 密码保护（防止未授权访问）
+    """
+    # 简单的密码保护，防止路人乱点
+    if secret != "my_super_secret_password":
+        return {"error": "密码错误"}
+
+    # 将爬虫任务加入后台队列
+    background_tasks.add_task(run_batch_crawl)
+
+    return {"message": "已触发后台更新任务，请稍后查看日志"}
+
+
+================================================================================
+FILE: app/core/config.py
+================================================================================
+
+"""应用配置管理模块"""
+from typing import Optional
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """应用配置类，从环境变量加载配置"""
+
+    # 数据库配置
+    DATABASE_URL: str = "postgresql+asyncpg://user:password@localhost:5432/dbname"
+    
+    # API 配置
+    API_V1_PREFIX: str = "/api/v1"
+    PROJECT_NAME: str = "AI Prediction Oracle"
+    VERSION: str = "0.1.0"
+    
+    # 日志配置
+    LOG_LEVEL: str = "INFO"
+    
+    # CORS 配置
+    CORS_ORIGINS: list[str] = ["*"]
+    
+    # 其他配置
+    DEBUG: bool = False
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        extra="ignore",
+    )
+
+
+settings = Settings()
+
+
+================================================================================
+FILE: app/core/__init__.py
+================================================================================
+
+"""核心模块"""
+
+
+================================================================================
+FILE: app/core/decorators.py
+================================================================================
+
+"""性能分析装饰器"""
+import time
+from functools import wraps
+from typing import Callable, Any
+
+
+def profile_endpoint(func: Callable) -> Callable:
+    """
+    性能分析装饰器，用于测量 API 端点的执行时间
+    
+    记录：
+    - SQL 执行和业务逻辑耗时
+    - 总逻辑耗时
+    """
+    @wraps(func)
+    async def wrapper(*args, **kwargs) -> Any:
+        # 1. DB 准备耗时记录 (通过 contextvars 或手动标记)
+        start_time = time.perf_counter()
+        
+        # 执行业务逻辑 (DB 查询)
+        db_start = time.perf_counter()
+        result = await func(*args, **kwargs)
+        db_end = time.perf_counter()
+        
+        # 2. 序列化耗时记录 (FastAPI 在返回 Response 时处理序列化)
+        # 注意：此处记录的是逻辑返回后的时间点
+        print(f"--- Profiling: {func.__name__} ---")
+        print(f"SQL Execution & Logic: {(db_end - db_start):.4f}s")
+        print(f"Total Logic Duration: {(time.perf_counter() - start_time):.4f}s")
+        
+        return result
+    return wrapper
+
+
+================================================================================
+FILE: app/models/ai_prediction.py
+================================================================================
+
+"""Intelligence Layer: AIPrediction"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from decimal import Decimal
+from typing import Optional
+
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Numeric, String, Text, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.db.base import Base
+
+
+class AIPrediction(Base):
+    __tablename__ = "ai_predictions"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    card_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("event_cards.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence_score: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
+    outcome_prediction: Mapped[str] = mapped_column(String(255), nullable=False)
+    raw_analysis: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        index=True,
+    )
+
+    card: Mapped["EventCard"] = relationship(
+        "EventCard",
+        back_populates="predictions",
+        lazy="selectin",
+    )
+
+
+================================================================================
+FILE: app/models/__init__.py
+================================================================================
+
+"""数据库模型模块（Application-First Schema）"""
+
+from app.models.ai_prediction import AIPrediction
+from app.models.card_tag import CardTag, card_tags
+from app.models.event_card import EventCard
+from app.models.event_snapshot import EventSnapshot
+from app.models.tag import Tag
+
+__all__ = [
+    "EventSnapshot",
+    "EventCard",
+    "Tag",
+    "CardTag",
+    "card_tags",
+    "AIPrediction",
+]
+
+
+================================================================================
+FILE: app/models/event_snapshot.py
+================================================================================
+
+"""Raw Data Layer: EventSnapshot"""
+
+from __future__ import annotations
+
+from datetime import datetime
+
+from sqlalchemy import BigInteger, DateTime, Index, String, func
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.db.base import Base
+
+
+class EventSnapshot(Base):
+    __tablename__ = "event_snapshots"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    polymarket_id: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
+    raw_data: Mapped[dict] = mapped_column(JSONB, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        Index("ix_event_snapshots_polymarket_id_created_at", "polymarket_id", "created_at"),
+    )
+
+
+
+================================================================================
+FILE: app/models/card_tag.py
+================================================================================
+
+"""EventCard <-> Tag 关联表"""
+
+from sqlalchemy import BigInteger, Column, ForeignKey, Table
+from sqlalchemy.orm import Mapped
+
+from app.db.base import Base
+
+card_tags = Table(
+    "card_tags",
+    Base.metadata,
+    Column(
+        "card_id",
+        BigInteger,
+        ForeignKey("event_cards.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "tag_id",
+        BigInteger,
+        ForeignKey("tags.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+)
+
+
+class CardTag(Base):
+    """card_tags 的 ORM 映射（便于查询/插入）"""
+
+    __table__ = card_tags
+
+    # typing only (列来自 __table__)
+    card_id: Mapped[int]
+    tag_id: Mapped[int]
+
+
+
+================================================================================
+FILE: app/models/event_card.py
+================================================================================
+
+"""Presentation Layer: EventCard"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from decimal import Decimal
+from typing import List, Optional
+
+from sqlalchemy import BigInteger, Boolean, DateTime, Numeric, String, Text, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.db.base import Base
+from app.models.card_tag import card_tags
+
+
+class EventCard(Base):
+    __tablename__ = "event_cards"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+
+    polymarket_id: Mapped[str] = mapped_column(
+        String(50),
+        unique=True,
+        index=True,
+        nullable=False,
+    )
+
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    slug: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    image_url: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+
+    volume: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2), nullable=True)
+    end_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    # Relationships
+    tags: Mapped[List["Tag"]] = relationship(
+        "Tag",
+        secondary=card_tags,
+        back_populates="cards",
+        lazy="selectin",
+    )
+    predictions: Mapped[List["AIPrediction"]] = relationship(
+        "AIPrediction",
+        back_populates="card",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by="desc(AIPrediction.created_at)",
+    )
+
+
+
+================================================================================
+FILE: app/models/tag.py
+================================================================================
+
+"""Tag 模型"""
+
+from __future__ import annotations
+
+from typing import List
+
+from sqlalchemy import BigInteger, String
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.db.base import Base
+from app.models.card_tag import card_tags
+
+
+class Tag(Base):
+    __tablename__ = "tags"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+
+    cards: Mapped[List["EventCard"]] = relationship(
+        "EventCard",
+        secondary=card_tags,
+        back_populates="tags",
+        lazy="selectin",
+    )
+
+
+================================================================================
+FILE: app/schemas/__init__.py
+================================================================================
+
+"""Pydantic 模式定义"""
+
+
+================================================================================
+FILE: app/schemas/card.py
+================================================================================
+
+"""Card API 的 Pydantic 模式定义"""
+import json
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+class TagItem(BaseModel):
+    """标签项"""
+
+    id: str
+    label: str
+    slug: str
+
+    class Config:
+        populate_by_name = True
+        from_attributes = True
+
+
+class MarketItem(BaseModel):
+    """市场项（从 raw_data 中提取）"""
+
+    id: str
+    question: str
+    outcomes: List[str]
+    currentPrices: Dict[str, float] = Field(alias="currentPrices")
+    volume: Optional[float] = None
+    liquidity: Optional[float] = None
+    active: bool = True
+
+    # 新增字段（按前端 Mock 要求）
+    probability: float = 0.0
+    adjustedProbability: float = 0.0
+    tagIds: List[str] = []
+    groupItemTitle: Optional[str] = None
+    icon: Optional[str] = None
+    archived: bool = False
+
+    @field_validator("outcomes", mode="before")
+    @classmethod
+    def parse_outcomes_json(cls, v):
+        """解析 outcomes JSON 字符串为列表"""
+        if isinstance(v, str):
+            try:
+                parsed = json.loads(v)
+                return parsed if isinstance(parsed, list) else []
+            except (json.JSONDecodeError, TypeError, ValueError):
+                return []
+        return v if isinstance(v, list) else []
+
+    @field_validator("currentPrices", mode="before")
+    @classmethod
+    def parse_current_prices_json(cls, v):
+        """解析 currentPrices JSON 字符串为字典"""
+        if isinstance(v, str):
+            try:
+                parsed = json.loads(v)
+                return parsed if isinstance(parsed, dict) else {}
+            except (json.JSONDecodeError, TypeError, ValueError):
+                return {}
+        return v if isinstance(v, dict) else {}
+
+    @model_validator(mode="before")
+    @classmethod
+    def compute_probabilities(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        从 outcomePrices（可能是字符串）计算 probability 和 adjustedProbability
+        - outcomePrices 例如: ["0.85", "0.15"] 或 '["0.85", "0.15"]'
+        """
+        outcome_prices = values.get("outcomePrices")
+
+        # 如果是字符串，先尝试解析为列表
+        if isinstance(outcome_prices, str):
+            try:
+                outcome_prices = json.loads(outcome_prices)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                outcome_prices = []
+
+        prob = 0.0
+        if isinstance(outcome_prices, (list, tuple)) and outcome_prices:
+            try:
+                prob = float(outcome_prices[0])
+            except (TypeError, ValueError):
+                prob = 0.0
+
+        values["probability"] = prob
+        values["adjustedProbability"] = prob
+        return values
+
+    class Config:
+        populate_by_name = True
+        from_attributes = True
+
+
+class CardData(BaseModel):
+    """卡片数据"""
+
+    id: str  # 公开的 ID，对应 polymarket_id
+    slug: str
+    title: str
+    description: Optional[str] = None
+    # 前端字段名为 icon，ORM 字段为 image_url
+    icon: Optional[str] = Field(default=None, validation_alias="image_url")
+    volume: Optional[float] = None
+    liquidity: Optional[float] = None
+    active: bool = True
+    closed: bool = False
+    startDate: Optional[str] = None
+    endDate: Optional[str] = None
+    createdAt: Optional[datetime] = None
+    updatedAt: Optional[datetime] = None
+    # 预留 AI 分析字段，方便后续扩展
+    ai_analysis: Optional[str] = None
+
+    tags: List[TagItem] = []
+    markets: List[MarketItem] = []
+
+    @model_validator(mode="after")
+    def process_markets(self) -> "CardData":
+        """
+        同步标签到 markets，并对 markets 进行过滤与排序：
+        1. 将父级 tags 的 id 同步到每个 market 的 tagIds（如果其为空）
+        2. 仅保留 active=True 且 archived=False 的 markets
+        3. 按 probability 降序排序，volume 作为次级排序键
+        """
+        if not self.markets:
+            return self
+
+        # 1. Sync Tags: 将父级 tags 的 id 同步到 market.tagIds
+        if self.tags:
+            tag_ids = [t.id for t in self.tags]
+            for m in self.markets:
+                if not m.tagIds:
+                    m.tagIds = tag_ids
+
+        # 2. 过滤：仅保留 active=True 且 archived=False 的 markets
+        valid_markets: List[MarketItem] = [
+            m
+            for m in self.markets
+            if m.active is True and getattr(m, "archived", False) is False
+        ]
+
+        # 3. 排序：按 probability 降序，volume 为次级排序键
+        valid_markets.sort(
+            key=lambda x: (x.probability, x.volume or 0.0),
+            reverse=True,
+        )
+
+        self.markets = valid_markets
+        return self
+
+    class Config:
+        populate_by_name = True
+        from_attributes = True
+
+
+class StandardResponse(BaseModel):
+    """标准 API 响应格式"""
+
+    code: int = 200
+    message: str = "success"
+    data: Any = None
+
+    class Config:
+        populate_by_name = True
+        from_attributes = True
+
+
+class CardListPayload(BaseModel):
+    """卡片列表数据载体，符合前端期望结构"""
+
+    total: int
+    page: int
+    pageSize: int
+    list: List[CardData]
+
+    class Config:
+        populate_by_name = True
+        from_attributes = True
+
+
+class CardListResponse(StandardResponse):
+    """卡片列表响应"""
+
+    data: CardListPayload
+
+
+class CardDetailsResponse(StandardResponse):
+    """卡片详情响应"""
+
+    data: CardData
+
+
+================================================================================
+FILE: app/db/session.py
+================================================================================
+
+"""异步数据库会话管理模块"""
+from typing import AsyncGenerator
+
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+
+from app.core.config import settings
+
+# 创建异步引擎
+engine = create_async_engine(
+    settings.DATABASE_URL,
+    echo=False,
+    future=True,
+    pool_pre_ping=True,
+    pool_size=10,
+    max_overflow=20,
+    # 关键修正：参数名是 statement_cache_size，禁用缓存以兼容 Supabase 连接池（6543 端口）
+    connect_args={"statement_cache_size": 0},
+)
+
+# 创建异步会话工厂
+AsyncSessionLocal = async_sessionmaker(
+    engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+    autocommit=False,
+    autoflush=False,
+)
+
+# 兼容别名：给 services/crawler.py 使用
+async_session_factory = AsyncSessionLocal
+
+
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    """
+    数据库会话依赖注入函数
+    
+    Yields:
+        AsyncSession: 异步数据库会话
+    """
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+        finally:
+            await session.close()
+
+
+================================================================================
+FILE: app/db/__init__.py
+================================================================================
+
+"""数据库模块"""
+
+
+================================================================================
+FILE: app/db/base.py
+================================================================================
+
+"""数据库基类和模型导入模块"""
+from sqlalchemy.orm import DeclarativeBase
+
+class Base(DeclarativeBase):
+    """SQLAlchemy 2.0 Declarative Base"""
+
+
+__all__ = ["Base"]
+
+
+================================================================================
+FILE: app/api/__init__.py
+================================================================================
+
+"""API 路由模块"""
+
+
+================================================================================
+FILE: app/api/endpoints/cards.py
+================================================================================
+
+"""Card API 端点"""
+import time
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import desc, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from app.core.decorators import profile_endpoint
+from app.db.session import get_db
+from app.models.card_tag import card_tags
+from app.models.event_card import EventCard
+from app.models.event_snapshot import EventSnapshot
+from app.models.tag import Tag
+from app.schemas.card import (
+    CardData,
+    CardDetailsResponse,
+    CardListPayload,
+    CardListResponse,
+)
+
+router = APIRouter()
+
+
+def _extract_markets_from_raw_data(raw_data: dict) -> list:
+    """从 raw_data 中提取 markets 列表"""
+    markets = raw_data.get("markets", [])
+    result = []
+    for market in markets:
+        # 提取所有关键字段，包括新增的字段
+        market_data = {
+            "id": market.get("id", ""),
+            "question": market.get("question", ""),
+            "outcomes": market.get("outcomes", []),
+            "currentPrices": market.get("currentPrices", {}),
+            "volume": market.get("volume"),
+            "liquidity": market.get("liquidity"),  # Market 级别的 liquidity
+            "active": market.get("active", True),
+            # 新增字段（前端 Mock 要求）
+            "groupItemTitle": market.get("groupItemTitle"),  # 修复：添加 groupItemTitle
+            "icon": market.get("icon"),  # Market 级别的 icon（如果有）
+            "outcomePrices": market.get("outcomePrices"),  # 修复：添加 outcomePrices（用于计算 probability）
+        }
+        result.append(market_data)
+    return result
+
+
+def _extract_tags_from_raw_data(raw_data: dict) -> list:
+    """从 raw_data 中提取 tags 列表"""
+    tags = raw_data.get("tags", [])
+    result = []
+    for tag in tags:
+        result.append({
+            "id": str(tag.get("id", "")),
+            "label": tag.get("label", ""),
+            "slug": tag.get("slug", ""),
+        })
+    return result
+
+
+def _build_card_data(card: EventCard, snapshot: Optional[EventSnapshot] = None) -> dict:
+    """构建卡片数据对象"""
+    raw_data = snapshot.raw_data if snapshot else {}
+    
+    # 格式化日期字段
+    def format_date(date_value):
+        """格式化日期为 ISO 字符串"""
+        if date_value is None:
+            return None
+        if isinstance(date_value, str):
+            return date_value
+        # 如果是 datetime 对象，转换为 ISO 格式
+        return date_value.isoformat() if hasattr(date_value, 'isoformat') else str(date_value)
+    
+    # 基础字段从 EventCard 获取，但优先使用 raw_data 中的最新值
+    # 修复：icon 字段映射 - 使用 validation_alias，所以这里用 image_url
+    card_dict = {
+        "id": card.polymarket_id,  # 使用 id 作为公开字段名
+        "slug": card.slug,
+        "title": card.title,
+        "description": card.description or raw_data.get("description"),
+        "image_url": card.image_url or raw_data.get("image") or raw_data.get("icon"),  # 修复：优先使用 image，其次 icon
+        "volume": float(card.volume) if card.volume else (float(raw_data.get("volume", 0)) if raw_data.get("volume") else None),
+        "liquidity": float(raw_data.get("liquidity", 0)) if raw_data.get("liquidity") else None,
+        "active": card.is_active,
+        "closed": raw_data.get("closed", False),
+        "startDate": format_date(raw_data.get("startDate")),
+        "endDate": format_date(raw_data.get("endDate")) or format_date(card.end_date),
+        "createdAt": card.created_at.isoformat() if card.created_at else None,  # 修复：添加 createdAt
+        "updatedAt": card.updated_at.isoformat() if card.updated_at else None,  # 修复：添加 updatedAt
+        "tags": _extract_tags_from_raw_data(raw_data),
+        "markets": _extract_markets_from_raw_data(raw_data),
+        "ai_analysis": None,  # 预留字段，当前为 None
+    }
+    return card_dict
+
+
+@router.get("/list", response_model=CardListResponse)
+@profile_endpoint
+async def get_card_list(
+    page: int = Query(1, ge=1, description="页码"),
+    pageSize: int = Query(20, ge=1, le=100, description="每页数量"),
+    tagId: Optional[str] = Query(None, description="标签 ID 过滤"),
+    sortBy: str = Query("volume", pattern="^(volume|liquidity)$", description="排序字段"),
+    order: str = Query("desc", pattern="^(asc|desc)$", description="排序方向"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取卡片列表
+    
+    - **page**: 页码（从 1 开始）
+    - **pageSize**: 每页数量（1-100）
+    - **tagId**: 可选的标签 ID 过滤
+    - **sortBy**: 排序字段（volume 或 liquidity）
+    - **order**: 排序方向（asc 或 desc）
+    """
+    print(f"\n⏱️ === 开始详细性能诊断 (Page: {page}, PageSize: {pageSize}) ===")
+    overall_start = time.perf_counter()
+
+    try:
+        # -------- 1. 构建基础查询（用于列表数据），并预加载关系以避免 N+1 --------
+        t_query_build_start = time.perf_counter()
+        base_query = (
+            select(EventCard)
+            .options(
+                selectinload(EventCard.tags),
+                # 目前 markets 来源于 EventSnapshot.raw_data，这里没有 ORM 关系可预加载
+                # 如未来为 Market 建表并建立关系，可在此添加 selectinload(EventCard.markets)
+            )
+            .where(EventCard.is_active == True)
+        )
+
+        # 标签过滤
+        if tagId:
+            base_query = base_query.join(
+                card_tags, EventCard.id == card_tags.c.card_id
+            ).join(
+                Tag, card_tags.c.tag_id == Tag.id
+            ).where(Tag.id == int(tagId))
+        t_query_build_end = time.perf_counter()
+        print(f"📋 [Step 0] 查询构建耗时: {(t_query_build_end - t_query_build_start) * 1000:.2f}ms")
+
+        # -------- 2. 优化 Count 查询：直接计数，避免子查询和排序 --------
+        t_count_start = time.perf_counter()
+        # 构建干净的 count 查询，完全不依赖 base_query，避免任何子查询开销
+        if tagId:
+            # 标签过滤：使用 COUNT(DISTINCT) 避免 JOIN 导致的重复计数
+            count_query = (
+                select(func.count(func.distinct(EventCard.id)))
+                .select_from(EventCard)
+                .join(card_tags, EventCard.id == card_tags.c.card_id)
+                .join(Tag, card_tags.c.tag_id == Tag.id)
+                .where(EventCard.is_active == True)
+                .where(Tag.id == int(tagId))
+            )
+        else:
+            # 无过滤：直接计数，最简单最快
+            count_query = (
+                select(func.count(EventCard.id))
+                .where(EventCard.is_active == True)
+            )
+        
+        # 直接执行 count 查询
+        total_result = await db.execute(count_query)
+        total_count = total_result.scalar_one() or 0
+        t_count_end = time.perf_counter()
+        print(f"📊 [Step 1] Count 查询耗时: {(t_count_end - t_count_start) * 1000:.2f}ms (Total: {total_count})")
+
+        # -------- 3. 排序（仍在 SQL 层面） --------
+        query = base_query
+        # 注意：liquidity 存储在 raw_data 中，无法直接在 SQL 层面排序
+        # 如果按 liquidity 排序，需要在 Python 层面处理
+        if sortBy == "volume":
+            sort_column = EventCard.volume
+            if order == "desc":
+                query = query.order_by(desc(sort_column))
+            else:
+                query = query.order_by(sort_column)
+        else:  # liquidity - 需要在获取数据后排序
+            # 先按 volume 排序作为默认，然后在 Python 层面重新排序
+            query = query.order_by(desc(EventCard.volume))
+
+        # -------- 4. 分页 --------
+        offset = (page - 1) * pageSize
+        query = query.offset(offset).limit(pageSize)
+
+        # -------- 5. 诊断 Main Query (DB + 网络) 耗时 --------
+        t_query_start = time.perf_counter()
+        result = await db.execute(query)
+        cards = result.scalars().all()
+        t_query_end = time.perf_counter()
+        print(f"🐢 [Step 2] 列表 SQL 执行 + 网络传输: {(t_query_end - t_query_start) * 1000:.2f}ms (Cards: {len(cards)})")
+
+        # -------- 6. 优化 Snapshot 查询：使用窗口函数获取最新快照 --------
+        t_snap_start = time.perf_counter()
+        card_data_list = []
+        if cards:
+            polymarket_ids = [card.polymarket_id for card in cards]
+
+            # 使用窗口函数子查询：为每个 polymarket_id 找到最新的 created_at
+            # 然后 JOIN 回原表获取完整记录（比循环过滤快得多）
+            from sqlalchemy import text
+            # 使用 PostgreSQL 的 DISTINCT ON（性能最优，但需要原生 SQL）
+            snapshots_query = text("""
+                SELECT DISTINCT ON (polymarket_id) 
+                    id, polymarket_id, raw_data, created_at
+                FROM event_snapshots
+                WHERE polymarket_id = ANY(:ids)
+                ORDER BY polymarket_id, created_at DESC
+            """)
+            
+            snapshots_result = await db.execute(
+                snapshots_query, {"ids": polymarket_ids}
+            )
+            snapshots_rows = snapshots_result.mappings().all()
+
+            # 将结果映射回字典格式（直接使用 raw_data，无需创建 EventSnapshot 对象）
+            latest_snapshot_by_id: dict[str, dict] = {}
+            for row in snapshots_rows:
+                latest_snapshot_by_id[row["polymarket_id"]] = {
+                    "raw_data": row["raw_data"],
+                    "created_at": row["created_at"],
+                }
+
+            # 构建卡片数据
+            t_build_start = time.perf_counter()
+            for card in cards:
+                snapshot_data = latest_snapshot_by_id.get(card.polymarket_id)
+                # 创建一个临时 EventSnapshot 对象用于 _build_card_data
+                snapshot = None
+                if snapshot_data:
+                    snapshot = EventSnapshot(
+                        polymarket_id=card.polymarket_id,
+                        raw_data=snapshot_data["raw_data"],
+                        created_at=snapshot_data["created_at"],
+                    )
+                card_dict = _build_card_data(card, snapshot)
+                card_data_list.append(card_dict)
+            t_build_end = time.perf_counter()
+            print(f"🔄 [Step 3] Snapshot 批量查询: {(t_build_start - t_snap_start) * 1000:.2f}ms")
+            print(f"   📦 [Step 3.1] 数据构建耗时: {(t_build_end - t_build_start) * 1000:.2f}ms")
+        t_snap_end = time.perf_counter()
+        print(f"🔄 [Step 3 Total] Snapshot 处理总耗时: {(t_snap_end - t_snap_start) * 1000:.2f}ms")
+
+        # -------- 7. 如果按 liquidity 排序，在 Python 层面排序 --------
+        if sortBy == "liquidity":
+            t_sort_start = time.perf_counter()
+            card_data_list.sort(
+                key=lambda x: x.get("liquidity") or 0,
+                reverse=(order == "desc"),
+            )
+            t_sort_end = time.perf_counter()
+            print(f"🔀 [Step 4] Python 层面排序耗时: {(t_sort_end - t_sort_start) * 1000:.2f}ms")
+
+        # -------- 8. 诊断 Pydantic 序列化耗时 --------
+        t_serialize_start = time.perf_counter()
+        card_data_objects = [CardData(**item) for item in card_data_list]
+        t_serialize_end = time.perf_counter()
+        print(f"🧠 [Step 5] Pydantic 序列化 (CPU): {(t_serialize_end - t_serialize_start) * 1000:.2f}ms")
+
+        # 构建符合前端期望结构的分页载体
+        payload = CardListPayload(
+            total=total_count,
+            page=page,
+            pageSize=pageSize,
+            list=card_data_objects,
+        )
+
+        overall_end = time.perf_counter()
+        print(f"🏁 [Total] 总接口逻辑耗时: {(overall_end - overall_start) * 1000:.2f}ms")
+        print("=" * 60 + "\n")
+
+        return CardListResponse(
+            code=200,
+            message="success",
+            data=payload,
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
+
+
+@router.get("/details", response_model=CardDetailsResponse)
+@profile_endpoint
+async def get_card_details(
+    id: str = Query(..., description="Polymarket Event ID"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取卡片详情
+    
+    - **id**: Polymarket Event ID（对应 EventCard.polymarket_id）
+    """
+    try:
+        # 查询 EventCard
+        card_query = select(EventCard).where(EventCard.polymarket_id == id)
+        card_result = await db.execute(card_query)
+        card = card_result.scalar_one_or_none()
+
+        if not card:
+            raise HTTPException(status_code=404, detail=f"Card with id '{id}' not found")
+
+        # 获取最新的 EventSnapshot
+        snapshot_query = (
+            select(EventSnapshot)
+            .where(EventSnapshot.polymarket_id == id)
+            .order_by(desc(EventSnapshot.created_at))
+            .limit(1)
+        )
+        snapshot_result = await db.execute(snapshot_query)
+        snapshot = snapshot_result.scalar_one_or_none()
+
+        card_dict = _build_card_data(card, snapshot)
+
+        return CardDetailsResponse(
+            code=200,
+            message="success",
+            data=CardData(**card_dict),
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
+
+
+
+
+================================================================================
+FILE: app/api/endpoints/__init__.py
+================================================================================
+
+"""API 端点模块"""
+
+
+================================================================================
+FILE: app/services/crawler.py
+================================================================================
+
+import asyncio
+import httpx
+import time
+import random
+from datetime import datetime
+from typing import List, Dict, Any
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.dialects.postgresql import insert
+
+from app.db.session import async_session_factory
+from app.models import EventSnapshot, EventCard, Tag, CardTag
+
+# --- 配置区域 ---
+POLYMARKET_API_URL = "https://gamma-api.polymarket.com/events"
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}
+# ⚠️ 如果你的代理端口不是 7890，请在这里修改
+PROXY_URL = "http://127.0.0.1:7890" 
+
+class PolymarketCrawler:
+    def __init__(self):
+        # 配置代理和超时
+        self.client = httpx.AsyncClient(
+            timeout=30.0, 
+            headers=HEADERS,
+            # proxies={
+            #     "http://": PROXY_URL,
+            #     "https://": PROXY_URL,
+            # }
+        )
+
+    async def fetch_page(self, limit: int = 50, offset: int = 0):
+        """抓取单页数据 (带计时)"""
+        params = {
+            "active": "true",
+            "closed": "false",
+            "limit": limit,
+            "offset": offset,
+            "order": "volume",
+            "ascending": "false",
+        }
+
+        try:
+            print(f"🕷️ [Offset {offset}] 准备发起请求...")
+            
+            # ⏱️ 计时点 1: API 请求
+            t_start = time.time()
+            response = await self.client.get(POLYMARKET_API_URL, params=params)
+            t_net = time.time()
+            
+            # 打印 API 耗时
+            duration = t_net - t_start
+            print(f"   📡 [网络] Polymarket API 耗时: {duration:.2f}s")
+            
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            print(f"❌ [Offset {offset}] 抓取失败: {str(e)}")
+            return []
+
+    async def save_batch(self, events_data: List[Dict[str, Any]]):
+        """分批存入数据库 (修复死锁版：批量处理 Tags)"""
+        if not events_data:
+            return
+
+        t_start = time.time()
+
+        async with async_session_factory() as session:
+            try:
+                # =================================================
+                # 第一步：提取所有 Tags 并批量处理 (解决死锁核心)
+                # =================================================
+                # 1. 收集本批次所有用到的 tag slug
+                all_tag_slugs = set()
+                for event in events_data:
+                    for t in event.get("tags", []):
+                        if t.get("slug"):
+                            all_tag_slugs.add(t.get("slug"))
+                
+                # 2. 排序 (关键！防止死锁)
+                sorted_slugs = sorted(list(all_tag_slugs))
+
+                tag_map = {}  # 存放 name -> id 的映射
+
+                if sorted_slugs:
+                    # 3. 批量插入 Tags (ON CONFLICT DO NOTHING)
+                    # 我们不需要在这里 RETURNING id，因为可能有的已经存在了，RETURNING 会拿不到
+                    await session.execute(
+                        insert(Tag)
+                        .values([{"name": slug} for slug in sorted_slugs])
+                        .on_conflict_do_nothing(index_elements=["name"])
+                    )
+
+                    # 4. 批量查出所有 Tags 的 ID
+                    tag_stmt = select(Tag.name, Tag.id).where(Tag.name.in_(sorted_slugs))
+                    tag_results = await session.execute(tag_stmt)
+                    for name, tag_id in tag_results.all():
+                        tag_map[name] = tag_id
+
+                # =================================================
+                # 第二步：处理 EventCard 和 关联关系
+                # =================================================
+                for event in events_data:
+                    poly_id = str(event.get("id"))
+                    
+                    # 字段清洗
+                    image_url = event.get("image") or event.get("icon")
+                    try:
+                        volume = float(event.get("volume") or 0)
+                    except:
+                        volume = 0.0
+                    
+                    end_date = None
+                    if event.get("endDate"):
+                        try:
+                            end_date = datetime.fromisoformat(event.get("endDate").replace("Z", "+00:00"))
+                        except:
+                            pass
+
+                    # 添加快照
+                    session.add(EventSnapshot(polymarket_id=poly_id, raw_data=event))
+
+                    # Upsert EventCard
+                    stmt = (
+                        insert(EventCard)
+                        .values(
+                            polymarket_id=poly_id,
+                            title=event.get("title", "No Title"),
+                            slug=event.get("slug", poly_id),
+                            description=event.get("description"),
+                            image_url=image_url,
+                            volume=volume,
+                            end_date=end_date,
+                            is_active=event.get("active", True),
+                            updated_at=datetime.utcnow(),
+                        )
+                        .on_conflict_do_update(
+                            index_elements=["polymarket_id"],
+                            set_={
+                                "title": event.get("title"),
+                                "volume": volume,
+                                "updated_at": datetime.utcnow(),
+                                "image_url": image_url,
+                                "is_active": event.get("active", True)
+                            },
+                        )
+                    )
+                    
+                    # 获取 Card ID
+                    result = await session.execute(stmt.returning(EventCard.id))
+                    card_id = result.scalar_one()
+
+                    # 建立关联 (使用内存里的 tag_map，不再查库)
+                    raw_tags = event.get("tags", [])
+                    for tag_data in raw_tags:
+                        t_slug = tag_data.get("slug")
+                        if t_slug and t_slug in tag_map:
+                            t_id = tag_map[t_slug]
+                            
+                            # 插入关联 (忽略冲突)
+                            # 使用 insert 而不是 add 对象，稍微快一点
+                            link_stmt = (
+                                insert(CardTag)
+                                .values(card_id=card_id, tag_id=t_id)
+                                .on_conflict_do_nothing()
+                            )
+                            await session.execute(link_stmt)
+
+                # 提交事务
+                await session.commit()
+                t_commit = time.time()
+                
+                # 算一下这一批的平均耗时
+                total_time = t_commit - t_start
+                print(f"   💾 [数据库] 写入 {len(events_data)} 条 | 耗时: {total_time:.2f}s")
+
+            except Exception as e:
+                await session.rollback()
+                # 打印更详细的错误堆栈，方便调试
+                print(f"❌ 入库批次失败: {str(e)}")
+
+    async def close(self):
+        await self.client.aclose()
+
+
+# -------------------------------------------------
+# 🚀 极速并发执行入口
+# -------------------------------------------------
+async def process_batch_task(crawler, offset, semaphore):
+    """单个批次任务"""
+    async with semaphore:
+        data = await crawler.fetch_page(limit=50, offset=offset)
+        
+        # 👇 加这行日志
+        print(f"📄 Offset {offset}: 抓到 {len(data)} 条数据")
+        
+        if not data:
+            return 0
+        await crawler.save_batch(data)
+        return len(data)
+
+async def run_batch_crawl():
+    crawler = PolymarketCrawler()
+    
+    # --- 参数配置 ---
+    TOTAL_TARGET = 1000   # 目标抓取数量
+    BATCH_SIZE = 50       # 每页数量
+    CONCURRENCY = 5       # 🔥 并发数：同时发 5 个请求
+    
+    print(f"🚀 启动极速爬虫 | 目标: {TOTAL_TARGET} | 并发: {CONCURRENCY}")
+    
+    semaphore = asyncio.Semaphore(CONCURRENCY)
+    offsets = range(0, TOTAL_TARGET, BATCH_SIZE)
+    
+    tasks = []
+    for offset in offsets:
+        task = process_batch_task(crawler, offset, semaphore)
+        tasks.append(task)
+    
+    try:
+        t_start = time.time()
+        results = await asyncio.gather(*tasks)
+        t_end = time.time()
+        
+        total = sum(results)
+        print("-" * 40)
+        print(f"🎉 任务结束！共处理 {total} 条数据")
+        print(f"⏱️ 总耗时: {t_end - t_start:.2f}s")
+        print(f"🚀 平均速度: {total / (t_end - t_start):.2f} 条/秒")
+            
+    finally:
+        await crawler.close()
+
+if __name__ == "__main__":
+    asyncio.run(run_batch_crawl())
