@@ -121,8 +121,11 @@ class PolymarketCrawler:
                         tag_map[poly_id] = tag_id
 
                 # =================================================
-                # 第二步：处理 EventCard 和 关联关系
+                # 第二步：处理 EventCard 和 EventSnapshot
                 # =================================================
+                # 收集 card_id 映射，用于后续批量插入关联
+                event_card_ids: dict[str, int] = {}  # polymarket_id -> card_id
+                
                 for event in events_data:
                     poly_id = str(event.get("id"))
                     
@@ -172,24 +175,34 @@ class PolymarketCrawler:
                     # 获取 Card ID
                     result = await session.execute(stmt.returning(EventCard.id))
                     card_id = result.scalar_one()
+                    event_card_ids[poly_id] = card_id
 
-                    # 建立关联 (使用内存里的 tag_map，通过 polymarket_id 查找本地 tag.id)
-                    raw_tags = event.get("tags", [])
-                    for tag_data in raw_tags:
+                # =================================================
+                # 第三步：批量插入关联关系 (使用 tag_map)
+                # =================================================
+                card_tag_links = []
+                for event in events_data:
+                    poly_id = str(event.get("id"))
+                    card_id = event_card_ids.get(poly_id)
+                    if not card_id:
+                        continue
+                    
+                    for tag_data in event.get("tags", []):
                         poly_tag_id = tag_data.get("id")
                         if poly_tag_id is None:
                             continue
                         poly_tag_id_str = str(poly_tag_id)
                         if poly_tag_id_str in tag_map:
-                            t_id = tag_map[poly_tag_id_str]
-                            
-                            # 插入关联 (忽略冲突)
-                            link_stmt = (
-                                insert(CardTag)
-                                .values(card_id=card_id, tag_id=t_id)
-                                .on_conflict_do_nothing()
-                            )
-                            await session.execute(link_stmt)
+                            card_tag_links.append({
+                                "card_id": card_id,
+                                "tag_id": tag_map[poly_tag_id_str],
+                            })
+                
+                # 批量插入关联 (忽略冲突)
+                if card_tag_links:
+                    await session.execute(
+                        insert(CardTag).values(card_tag_links).on_conflict_do_nothing()
+                    )
 
                 # 提交事务
                 await session.commit()
