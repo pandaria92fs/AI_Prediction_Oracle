@@ -3,16 +3,15 @@ from typing import Optional
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import desc, select
+from sqlalchemy import bindparam, desc, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.endpoints import cards
 from app.core.config import settings
 from app.db.session import get_db
-from app.models.card_tag import card_tags
 from app.models.event_card import EventCard
-from app.models.tag import Tag
+from app.models.event_snapshot import EventSnapshot
 from app.services.crawler import run_batch_crawl
 
 app = FastAPI(
@@ -67,7 +66,7 @@ async def health():
 async def get_cards(
     page: int = Query(1, ge=1, description="页码"),
     pageSize: int = Query(20, ge=1, description="每页数量"),
-    tag_id: Optional[str] = Query(None, description="标签 ID 过滤"),
+    tag_id: Optional[str] = Query(None, description="第三方标签 ID 过滤（Polymarket 的 tag id）"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -75,7 +74,7 @@ async def get_cards(
     
     - **page**: 页码（从 1 开始）
     - **pageSize**: 每页数量
-    - **tag_id**: 可选的标签 ID 过滤
+    - **tag_id**: 可选的第三方标签 ID 过滤（从 Polymarket API 的 raw_data.tags 中获取）
     """
     offset = (page - 1) * pageSize
     
@@ -86,13 +85,23 @@ async def get_cards(
         .where(EventCard.is_active == True)
     )
     
-    # 如果传了 tag_id，就加过滤条件（通过 JOIN 关联表）
+    # 如果传了 tag_id，从 EventSnapshot 的 raw_data JSONB 中过滤
+    # 使用 PostgreSQL 的 JSONB 查询：检查 tags 数组中是否有 id 匹配的元素
     if tag_id:
+        # JOIN EventSnapshot 表，并使用 JSONB 查询条件
+        # 检查 raw_data->'tags' 数组中是否有 id 等于 tag_id 的元素
         query = query.join(
-            card_tags, EventCard.id == card_tags.c.card_id
-        ).join(
-            Tag, card_tags.c.tag_id == Tag.id
-        ).where(Tag.id == int(tag_id))
+            EventSnapshot,
+            EventCard.polymarket_id == EventSnapshot.polymarket_id
+        ).where(
+            text("""
+                EXISTS (
+                    SELECT 1 
+                    FROM jsonb_array_elements(event_snapshots.raw_data->'tags') AS tag
+                    WHERE tag->>'id' = :tag_id
+                )
+            """).bindparams(bindparam("tag_id", tag_id))
+        ).distinct()
     
     # 加上分页和排序
     query = query.offset(offset).limit(pageSize).order_by(desc(EventCard.created_at))
