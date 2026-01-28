@@ -65,8 +65,8 @@ class MarketItem(BaseModel):
     @classmethod
     def compute_probabilities(cls, values: Dict[str, Any]) -> Dict[str, Any]:
         """
-        从 outcomePrices（可能是字符串）计算 probability 和 adjustedProbability
-        - outcomePrices 例如: ["0.85", "0.15"] 或 '["0.85", "0.15"]'
+        从 outcomePrices（可能是字符串）计算 probability
+        adjustedProbability 优先使用 AI 分析数据，否则使用 probability
         """
         outcome_prices = values.get("outcomePrices")
 
@@ -85,7 +85,14 @@ class MarketItem(BaseModel):
                 prob = 0.0
 
         values["probability"] = prob
-        values["adjustedProbability"] = prob
+        
+        # 优先使用 AI 调整后的概率，否则使用原始 probability
+        ai_prob = values.get("ai_adjusted_probability")
+        if ai_prob is not None:
+            # AI 概率是百分比（如 56.5），需要转为小数（0.565）
+            values["adjustedProbability"] = float(ai_prob) / 100.0
+        else:
+            values["adjustedProbability"] = prob
         return values
 
     class Config:

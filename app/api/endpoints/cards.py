@@ -24,14 +24,16 @@ from app.schemas.card import (
 router = APIRouter()
 
 
-def _extract_markets_from_raw_data(raw_data: dict) -> list:
-    """从 raw_data 中提取 markets 列表"""
+def _extract_markets_from_raw_data(raw_data: dict, ai_markets: dict = None) -> list:
+    """从 raw_data 中提取 markets 列表，并合并 AI 分析数据"""
     markets = raw_data.get("markets", [])
+    ai_markets = ai_markets or {}
     result = []
     for market in markets:
+        market_id = market.get("id", "")
         # 提取所有关键字段，包括新增的字段
         market_data = {
-            "id": market.get("id", ""),
+            "id": market_id,
             "question": market.get("question", ""),
             "outcomes": market.get("outcomes", []),
             "currentPrices": market.get("currentPrices", {}),
@@ -43,6 +45,9 @@ def _extract_markets_from_raw_data(raw_data: dict) -> list:
             "icon": market.get("icon"),  # Market 级别的 icon（如果有）
             "outcomePrices": market.get("outcomePrices"),  # 修复：添加 outcomePrices（用于计算 probability）
         }
+        # 如果有 AI 分析数据，添加 ai_adjusted_probability
+        if market_id in ai_markets:
+            market_data["ai_adjusted_probability"] = ai_markets[market_id].get("ai_calibrated_odds_pct")
         result.append(market_data)
     return result
 
@@ -77,6 +82,7 @@ def _build_card_data(card: EventCard, snapshot: Optional[EventSnapshot] = None, 
     # 获取 AI 预测数据（从最新的 prediction 中提取）
     ai_logic_summary = None
     adjusted_probability = None
+    ai_markets = {}  # market_id -> AI 分析数据
     if predictions and len(predictions) > 0:
         # predictions 应该按 created_at 降序排序，取第一个
         latest = predictions[0]
@@ -87,6 +93,13 @@ def _build_card_data(card: EventCard, snapshot: Optional[EventSnapshot] = None, 
                 adjusted_probability = float(latest.outcome_prediction)
             except ValueError:
                 adjusted_probability = None
+        # 解析 raw_analysis 获取每个 market 的 AI 概率
+        if latest.raw_analysis:
+            try:
+                import json
+                ai_markets = json.loads(latest.raw_analysis)
+            except (json.JSONDecodeError, TypeError):
+                ai_markets = {}
     
     # 基础字段从 EventCard 获取，但优先使用 raw_data 中的最新值
     # 修复：icon 字段映射 - 使用 validation_alias，所以这里用 image_url
@@ -105,7 +118,7 @@ def _build_card_data(card: EventCard, snapshot: Optional[EventSnapshot] = None, 
         "createdAt": card.created_at.isoformat() if card.created_at else None,  # 修复：添加 createdAt
         "updatedAt": card.updated_at.isoformat() if card.updated_at else None,  # 修复：添加 updatedAt
         "tags": _extract_tags_from_raw_data(raw_data),
-        "markets": _extract_markets_from_raw_data(raw_data),
+        "markets": _extract_markets_from_raw_data(raw_data, ai_markets),
         "aILogicSummary": ai_logic_summary,  # AI 分析摘要
         "adjustedProbability": adjusted_probability,  # AI 调整后的概率
     }
