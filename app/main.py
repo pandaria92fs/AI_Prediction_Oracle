@@ -124,14 +124,14 @@ async def get_cards(
             "is_active": card.is_active,
             "created_at": card.created_at.isoformat() if card.created_at else None,
             "updated_at": card.updated_at.isoformat() if card.updated_at else None,
-            "aiLogicSummary": None,  # 默认值
+            "aILogicSummary": None,  # 默认值
         }
         
-        # 从 predictions 中取最新的 summary 作为 aiLogicSummary
+        # 从 predictions 中取最新的 summary 作为 aILogicSummary
         # predictions 已经按 created_at 降序排序，所以第一个就是最新的
         if card.predictions and len(card.predictions) > 0:
             latest_prediction = card.predictions[0]
-            card_dict["aiLogicSummary"] = latest_prediction.summary
+            card_dict["aILogicSummary"] = latest_prediction.summary
         
         cards_data.append(card_dict)
     

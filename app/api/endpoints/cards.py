@@ -98,7 +98,7 @@ def _build_card_data(card: EventCard, snapshot: Optional[EventSnapshot] = None, 
         "updatedAt": card.updated_at.isoformat() if card.updated_at else None,  # 修复：添加 updatedAt
         "tags": _extract_tags_from_raw_data(raw_data),
         "markets": _extract_markets_from_raw_data(raw_data),
-        "aiLogicSummary": ai_logic_summary,  # AI 分析摘要
+        "aILogicSummary": ai_logic_summary,  # AI 分析摘要
     }
     return card_dict
 
