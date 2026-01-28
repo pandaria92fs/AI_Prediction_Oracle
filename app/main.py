@@ -3,15 +3,16 @@ from typing import Optional
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import bindparam, desc, select, text
+from sqlalchemy import desc, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.endpoints import cards
 from app.core.config import settings
 from app.db.session import get_db
+from app.models.card_tag import card_tags
 from app.models.event_card import EventCard
-from app.models.event_snapshot import EventSnapshot
+from app.models.tag import Tag
 from app.services.crawler import run_batch_crawl
 
 app = FastAPI(
@@ -74,7 +75,7 @@ async def get_cards(
     
     - **page**: 页码（从 1 开始）
     - **pageSize**: 每页数量
-    - **tag_id**: 可选的第三方标签 ID 过滤（从 Polymarket API 的 raw_data.tags 中获取）
+    - **tag_id**: 可选的标签过滤（使用规范化 tags 关联表）
     """
     offset = (page - 1) * pageSize
     
@@ -85,24 +86,23 @@ async def get_cards(
         .where(EventCard.is_active == True)
     )
     
-    # 如果传了 tag_id，从 EventSnapshot 的 raw_data JSONB 中过滤
-    # 使用 PostgreSQL 的 JSONB 查询：检查 tags 数组中是否有 id 匹配的元素
+    # 如果传了 tag_id，使用规范化的 tags / card_tags 关联表进行过滤（高性能索引查询）
     if tag_id:
-        # JOIN EventSnapshot 表，并使用 JSONB 查询条件
-        # 检查 raw_data->'tags' 数组中是否有任何一个 tag 的 id 等于传入的 tag_id
-        # 注意：tags 是一个数组，每个元素是 {id, label, slug, ...} 对象
         query = query.join(
-            EventSnapshot,
-            EventCard.polymarket_id == EventSnapshot.polymarket_id
+            card_tags,
+            EventCard.id == card_tags.c.card_id,
+        ).join(
+            Tag,
+            Tag.id == card_tags.c.tag_id,
         ).where(
-            text("""
-                EXISTS (
-                    SELECT 1 
-                    FROM jsonb_array_elements(event_snapshots.raw_data->'tags') AS tag
-                    WHERE tag->>'id' = :tag_id
-                )
-            """).bindparams(bindparam("tag_id", tag_id))
-        ).distinct()
+            # 兼容两种情况：
+            # 1) 前端传的是内部自增 ID（数字字符串）
+            # 2) 前端传的是 slug（我们在爬虫里把 polymarket slug 存到了 Tag.name）
+            or_(
+                Tag.name == tag_id,
+                Tag.id == (int(tag_id) if tag_id.isdigit() else -1),
+            )
+        )
     
     # 加上分页和排序
     query = query.offset(offset).limit(pageSize).order_by(desc(EventCard.created_at))
