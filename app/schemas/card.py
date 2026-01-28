@@ -112,6 +112,8 @@ class CardData(BaseModel):
     updatedAt: Optional[datetime] = None
     # AI 分析摘要（从 ai_predictions 表获取）
     aILogicSummary: Optional[str] = None
+    # AI 调整后的概率（百分比，如 56.5 表示 56.5%）
+    adjustedProbability: Optional[float] = None
 
     tags: List[TagItem] = []
     markets: List[MarketItem] = []

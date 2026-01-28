@@ -74,11 +74,19 @@ def _build_card_data(card: EventCard, snapshot: Optional[EventSnapshot] = None, 
         # 如果是 datetime 对象，转换为 ISO 格式
         return date_value.isoformat() if hasattr(date_value, 'isoformat') else str(date_value)
     
-    # 获取 aiLogicSummary（从最新的 prediction 中提取）
+    # 获取 AI 预测数据（从最新的 prediction 中提取）
     ai_logic_summary = None
+    adjusted_probability = None
     if predictions and len(predictions) > 0:
         # predictions 应该按 created_at 降序排序，取第一个
-        ai_logic_summary = predictions[0].summary
+        latest = predictions[0]
+        ai_logic_summary = latest.summary
+        # outcome_prediction 存的是纯数字，如 "56.5"
+        if latest.outcome_prediction:
+            try:
+                adjusted_probability = float(latest.outcome_prediction)
+            except ValueError:
+                adjusted_probability = None
     
     # 基础字段从 EventCard 获取，但优先使用 raw_data 中的最新值
     # 修复：icon 字段映射 - 使用 validation_alias，所以这里用 image_url
@@ -99,6 +107,7 @@ def _build_card_data(card: EventCard, snapshot: Optional[EventSnapshot] = None, 
         "tags": _extract_tags_from_raw_data(raw_data),
         "markets": _extract_markets_from_raw_data(raw_data),
         "aILogicSummary": ai_logic_summary,  # AI 分析摘要
+        "adjustedProbability": adjusted_probability,  # AI 调整后的概率
     }
     return card_dict
 

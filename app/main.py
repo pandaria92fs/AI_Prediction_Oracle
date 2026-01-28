@@ -125,13 +125,20 @@ async def get_cards(
             "created_at": card.created_at.isoformat() if card.created_at else None,
             "updated_at": card.updated_at.isoformat() if card.updated_at else None,
             "aILogicSummary": None,  # 默认值
+            "adjustedProbability": None,  # AI 调整后的概率
         }
         
-        # 从 predictions 中取最新的 summary 作为 aILogicSummary
+        # 从 predictions 中取最新的数据
         # predictions 已经按 created_at 降序排序，所以第一个就是最新的
         if card.predictions and len(card.predictions) > 0:
             latest_prediction = card.predictions[0]
             card_dict["aILogicSummary"] = latest_prediction.summary
+            # outcome_prediction 存的是纯数字，如 "56.5"
+            if latest_prediction.outcome_prediction:
+                try:
+                    card_dict["adjustedProbability"] = float(latest_prediction.outcome_prediction)
+                except ValueError:
+                    pass
         
         cards_data.append(card_dict)
     

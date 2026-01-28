@@ -169,7 +169,7 @@ async def seed(csv_path: Path):
             markets = data.get("markets", {})
             
             # 找出 original_odds 最高的 market，提取其 ai_calibrated_odds_pct
-            outcome_prediction = "N/A"
+            outcome_prediction = "0"
             if markets:
                 # 找到 original_odds 最高的 market
                 best_market = max(
@@ -178,13 +178,12 @@ async def seed(csv_path: Path):
                 )
                 market_id, market_data = best_market
                 ai_odds_raw = market_data.get("ai_calibrated_odds_pct", 0)
-                question = market_data.get("question", "Unknown")
                 
                 # 解析 ai_calibrated_odds_pct（可能是小数 0.565 或百分比字符串 "22.00%"）
                 ai_odds_pct = parse_odds(ai_odds_raw)
                 
-                # 格式化输出，例如: "56.5% - Will Trump win?"
-                outcome_prediction = f"{ai_odds_pct:.1f}% - {question[:100]}"
+                # 只存数字，如 "56.5"
+                outcome_prediction = f"{ai_odds_pct:.1f}"
             
             # 精简 raw_analysis，只保留关键字段，统一格式
             raw_markets = {}
@@ -200,7 +199,7 @@ async def seed(csv_path: Path):
                 "card_id": card_id,
                 "summary": executive_summary or "No summary available",
                 "confidence_score": Decimal("0.85"),  # 默认置信度
-                "outcome_prediction": outcome_prediction,
+                "outcome_prediction": outcome_prediction,  # 格式: "56.5% - Question"
                 "raw_analysis": json.dumps(raw_markets, ensure_ascii=False),
             })
         
