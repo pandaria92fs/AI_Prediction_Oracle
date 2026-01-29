@@ -45,9 +45,31 @@ def _extract_markets_from_raw_data(raw_data: dict, ai_markets: dict = None) -> l
             "icon": market.get("icon"),  # Market 级别的 icon（如果有）
             "outcomePrices": market.get("outcomePrices"),  # 修复：添加 outcomePrices（用于计算 probability）
         }
-        # 如果有 AI 分析数据，添加 ai_adjusted_probability
+        
+        # 如果有 AI 分析数据，注入相关字段
         if market_id in ai_markets:
-            market_data["ai_adjusted_probability"] = ai_markets[market_id].get("ai_calibrated_odds_pct")
+            ai_data = ai_markets[market_id]
+            
+            # 1. AI 调整后的概率
+            if "ai_calibrated_odds_pct" in ai_data:
+                market_data["ai_adjusted_probability"] = float(ai_data["ai_calibrated_odds_pct"])
+            
+            # 2. AI 置信度 (confidence_score 可能是 0-10 或 0-100)
+            if "ai_confidence" in ai_data:
+                confidence = float(ai_data["ai_confidence"])
+                # 如果是 0-10 范围，转换为 0-100
+                if confidence <= 10:
+                    confidence = confidence * 10
+                market_data["ai_confidence"] = confidence
+            
+            # 3. AI 分析详情 (支持多种 key 格式)
+            market_data["ai_analysis_data"] = {
+                "structuralAnchor": ai_data.get("anchor") or ai_data.get("structural_anchor"),
+                "noise": ai_data.get("noise") or ai_data.get("the_noise"),
+                "barrier": ai_data.get("barrier") or ai_data.get("the_barrier"),
+                "blindspot": ai_data.get("blindspot") or ai_data.get("the_blindspot"),
+            }
+        
         result.append(market_data)
     return result
 

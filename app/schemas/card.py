@@ -18,24 +18,39 @@ class TagItem(BaseModel):
         from_attributes = True
 
 
+class AIAnalysis(BaseModel):
+    """AI 分析详情"""
+    structural_anchor: Optional[str] = Field(None, serialization_alias="structuralAnchor")
+    noise: Optional[str] = None
+    barrier: Optional[str] = None
+    blindspot: Optional[str] = None
+
+    class Config:
+        populate_by_name = True
+
+
 class MarketItem(BaseModel):
     """市场项（从 raw_data 中提取）"""
 
     id: str
     question: str
     outcomes: List[str]
-    currentPrices: Dict[str, float] = Field(alias="currentPrices")
+    current_prices: Dict[str, float] = Field(default_factory=dict, serialization_alias="currentPrices")
     volume: Optional[float] = None
     liquidity: Optional[float] = None
     active: bool = True
 
     # 新增字段（按前端 Mock 要求）
     probability: float = 0.0
-    adjustedProbability: float = 0.0
-    tagIds: List[str] = []
-    groupItemTitle: Optional[str] = None
+    adjusted_probability: float = Field(0.0, serialization_alias="adjustedProbability")
+    tag_ids: List[str] = Field(default_factory=list, serialization_alias="tagIds")
+    group_item_title: Optional[str] = Field(None, serialization_alias="groupItemTitle")
     icon: Optional[str] = None
     archived: bool = False
+    
+    # AI 分析字段
+    ai_confidence: Optional[float] = Field(None, serialization_alias="aiConfidence")
+    ai_analysis: Optional[AIAnalysis] = Field(None, serialization_alias="aiAnalysis")
 
     @field_validator("outcomes", mode="before")
     @classmethod
@@ -49,14 +64,13 @@ class MarketItem(BaseModel):
                 return []
         return v if isinstance(v, list) else []
 
-    @field_validator("currentPrices", mode="before")
+    @field_validator("current_prices", mode="before")
     @classmethod
-    def parse_current_prices_json(cls, v):
-        """解析 currentPrices JSON 字符串为字典"""
+    def parse_current_prices(cls, v):
+        """解析 currentPrices"""
         if isinstance(v, str):
             try:
-                parsed = json.loads(v)
-                return parsed if isinstance(parsed, dict) else {}
+                return json.loads(v)
             except (json.JSONDecodeError, TypeError, ValueError):
                 return {}
         return v if isinstance(v, dict) else {}
@@ -65,9 +79,21 @@ class MarketItem(BaseModel):
     @classmethod
     def compute_probabilities(cls, values: Dict[str, Any]) -> Dict[str, Any]:
         """
-        从 outcomePrices（可能是字符串）计算 probability
-        adjustedProbability 优先使用 AI 分析数据，否则使用 probability
+        从 outcomePrices 计算 probability
+        adjusted_probability 优先使用 AI 分析数据，否则使用 probability
         """
+        # 处理 currentPrices 字段映射
+        if "currentPrices" in values and "current_prices" not in values:
+            values["current_prices"] = values.pop("currentPrices")
+        
+        # 处理 tagIds 字段映射
+        if "tagIds" in values and "tag_ids" not in values:
+            values["tag_ids"] = values.pop("tagIds")
+        
+        # 处理 groupItemTitle 字段映射
+        if "groupItemTitle" in values and "group_item_title" not in values:
+            values["group_item_title"] = values.pop("groupItemTitle")
+        
         outcome_prices = values.get("outcomePrices")
 
         # 如果是字符串，先尝试解析为列表
@@ -90,9 +116,25 @@ class MarketItem(BaseModel):
         ai_prob = values.get("ai_adjusted_probability")
         if ai_prob is not None:
             # AI 概率是百分比（如 56.5），需要转为小数（0.565）
-            values["adjustedProbability"] = float(ai_prob) / 100.0
+            values["adjusted_probability"] = float(ai_prob) / 100.0
         else:
-            values["adjustedProbability"] = prob
+            values["adjusted_probability"] = prob
+        
+        # AI 置信度
+        ai_confidence = values.get("ai_confidence")
+        if ai_confidence is not None:
+            values["ai_confidence"] = float(ai_confidence)
+        
+        # AI 分析详情
+        ai_analysis_data = values.get("ai_analysis_data")
+        if ai_analysis_data and isinstance(ai_analysis_data, dict):
+            values["ai_analysis"] = {
+                "structural_anchor": ai_analysis_data.get("structuralAnchor"),
+                "noise": ai_analysis_data.get("noise"),
+                "barrier": ai_analysis_data.get("barrier"),
+                "blindspot": ai_analysis_data.get("blindspot"),
+            }
+        
         return values
 
     class Config:
@@ -136,12 +178,12 @@ class CardData(BaseModel):
         if not self.markets:
             return self
 
-        # 1. Sync Tags: 将父级 tags 的 id 同步到 market.tagIds
+        # 1. Sync Tags: 将父级 tags 的 id 同步到 market.tag_ids
         if self.tags:
             tag_ids = [t.id for t in self.tags]
             for m in self.markets:
-                if not m.tagIds:
-                    m.tagIds = tag_ids
+                if not m.tag_ids:
+                    m.tag_ids = tag_ids
 
         # 2. 过滤：仅保留 active=True 且 archived=False 的 markets
         valid_markets: List[MarketItem] = [

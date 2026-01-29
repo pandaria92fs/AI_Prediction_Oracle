@@ -2,15 +2,17 @@ import asyncio
 import httpx
 import time
 import random
+import json
 from datetime import datetime
 from typing import List, Dict, Any
 
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert
 
 from app.db.session import async_session_factory
-from app.models import EventSnapshot, EventCard, Tag, CardTag
+from app.models import EventSnapshot, EventCard, Tag, CardTag, AIPrediction
+from app.services.gemini_analyzer import ai_analyzer
 
 # --- 配置区域 ---
 POLYMARKET_API_URL = "https://gamma-api.polymarket.com/events"
@@ -67,6 +69,9 @@ class PolymarketCrawler:
             return
 
         t_start = time.time()
+        
+        # 收集 card_id 映射，用于 AI 分析 (定义在 session 外部以便传递)
+        event_card_ids: dict[str, int] = {}
 
         async with async_session_factory() as session:
             try:
@@ -123,9 +128,6 @@ class PolymarketCrawler:
                 # =================================================
                 # 第二步：处理 EventCard 和 EventSnapshot
                 # =================================================
-                # 收集 card_id 映射，用于后续批量插入关联
-                event_card_ids: dict[str, int] = {}  # polymarket_id -> card_id
-                
                 for event in events_data:
                     poly_id = str(event.get("id"))
                     
@@ -216,6 +218,110 @@ class PolymarketCrawler:
                 await session.rollback()
                 # 打印更详细的错误堆栈，方便调试
                 print(f"❌ 入库批次失败: {str(e)}")
+                return  # 主流程失败时不进行 AI 分析
+
+        # =================================================
+        # 第四步：AI 分析 (独立事务处理)
+        # =================================================
+        # 只有在主流程成功后，并且收集到了 card_ids 时才进行
+        if event_card_ids:
+            await self._process_ai_analysis(events_data, event_card_ids)
+
+    async def _process_ai_analysis(self, events_data: List[Dict[str, Any]], event_card_ids: Dict[str, int]):
+        """
+        [内部方法] 对爬取的事件进行 AI 分析并保存结果
+        注意：使用独立的 session，并且为了避免 API 限流，串行处理
+        """
+        # 如果没有配置 GEMINI_API_KEY，跳过
+        if not ai_analyzer.api_key:
+            return
+
+        async with async_session_factory() as session:
+            try:
+                for event in events_data:
+                    poly_id = str(event.get("id"))
+                    card_id = event_card_ids.get(poly_id)
+                    
+                    if not card_id:
+                        continue
+                    
+                    # 检查是否有关联市场
+                    markets = event.get("markets", [])
+                    if not markets:
+                        continue
+                    
+                    # 构建事件数据
+                    event_data_for_ai = {
+                        "title": event.get("title", ""),
+                        "description": event.get("description", ""),
+                        "markets": markets
+                    }
+                    
+                    # 调用 AI 分析 (串行执行以保护 API 限流)
+                    try:
+                        # 稍微延迟，避免请求过快
+                        await asyncio.sleep(0.5)
+                        ai_result = await ai_analyzer.analyze_event(event_data_for_ai)
+                    except Exception as e:
+                        print(f"   ⚠️ AI 分析出错 ({poly_id}): {e}")
+                        continue
+                        
+                    if not ai_result:
+                        continue
+                        
+                    # 解析 AI 结果
+                    summary = ai_result.get("executive_summary", "No summary available")
+                    markets_data = ai_result.get("markets", {})
+                    
+                    # 找到主要预测 (最高 confidence)
+                    primary_prediction = "0"
+                    primary_conf = 0.0
+                    
+                    for mid, mdata in markets_data.items():
+                        conf = mdata.get("confidence_score", 0)
+                        if conf > primary_conf:
+                            primary_conf = conf
+                            odds = mdata.get("ai_calibrated_odds", 0) * 100
+                            primary_prediction = f"{odds:.1f}"
+                    
+                    # 转换 raw_analysis 格式
+                    raw_analysis = ai_analyzer.transform_to_raw_analysis(ai_result)
+                    
+                    # 补充原始数据到 raw_analysis
+                    for market in markets:
+                        m_id = str(market.get("id", ""))
+                        if m_id in raw_analysis:
+                            raw_analysis[m_id]["question"] = market.get("question", "")
+                            outcome_prices = market.get("outcomePrices", [])
+                            if outcome_prices:
+                                try:
+                                    if isinstance(outcome_prices, str):
+                                        outcome_prices = json.loads(outcome_prices)
+                                    if outcome_prices:
+                                        raw_analysis[m_id]["original_odds"] = float(outcome_prices[0])
+                                except (json.JSONDecodeError, ValueError, IndexError):
+                                    pass
+                    
+                    # 存入数据库：先删除旧的预测
+                    await session.execute(
+                        delete(AIPrediction).where(AIPrediction.card_id == card_id)
+                    )
+                    
+                    new_prediction = AIPrediction(
+                        card_id=card_id,
+                        summary=summary,
+                        outcome_prediction=primary_prediction,
+                        confidence_score=min(primary_conf * 10, 99.99),  # 转为 0-100
+                        raw_analysis=json.dumps(raw_analysis, ensure_ascii=False)
+                    )
+                    session.add(new_prediction)
+                    print(f"   🤖 AI 分析完成: {event.get('title', '')[:30]}...")
+                
+                await session.commit()
+                
+            except Exception as e:
+                await session.rollback()
+                print(f"❌ AI 分析批次处理失败: {e}")
 
     async def close(self):
         await self.client.aclose()

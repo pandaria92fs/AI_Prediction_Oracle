@@ -193,6 +193,13 @@ async def seed(csv_path: Path):
                     "original_odds": mdata.get("original_odds"),
                     # 统一转换为百分比数值 (如 56.5)
                     "ai_calibrated_odds_pct": parse_odds(mdata.get("ai_calibrated_odds_pct")),
+                    # AI 置信度（如果 CSV 有提供）
+                    "ai_confidence": mdata.get("ai_confidence", 85.0),  # 默认 85
+                    # AI 分析详情（如果 CSV 有提供）
+                    "structural_anchor": mdata.get("structural_anchor"),
+                    "noise": mdata.get("noise"),
+                    "barrier": mdata.get("barrier"),
+                    "blindspot": mdata.get("blindspot"),
                 }
             
             predictions_to_insert.append({
