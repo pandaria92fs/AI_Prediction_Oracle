@@ -379,8 +379,11 @@ async def get_card_list(
         used_ids = set()
         ptr_vol, ptr_alpha = 0, 0
         turn_volume = True  # 从 volume 开始
+        target_size = len(card_data_list)
 
-        while len(final_list) < len(card_data_list):
+        while len(final_list) < target_size:
+            added = False
+            
             if turn_volume:
                 # 从 list_volume 取下一个未使用的
                 while ptr_vol < len(list_volume):
@@ -389,11 +392,8 @@ async def get_card_list(
                     if card.get("id") not in used_ids:
                         final_list.append(card)
                         used_ids.add(card.get("id"))
+                        added = True
                         break
-                else:
-                    # list_volume 已耗尽，切换到 alpha
-                    turn_volume = False
-                    continue
             else:
                 # 从 list_alpha 取下一个未使用的（去重保护：自动顺延）
                 while ptr_alpha < len(list_alpha):
@@ -402,13 +402,15 @@ async def get_card_list(
                     if card.get("id") not in used_ids:
                         final_list.append(card)
                         used_ids.add(card.get("id"))
+                        added = True
                         break
-                else:
-                    # list_alpha 已耗尽，切换到 volume
-                    turn_volume = True
-                    continue
+            
             # 交替切换
             turn_volume = not turn_volume
+            
+            # 安全检查：如果两个列表都耗尽且没有添加新元素，退出循环
+            if not added and ptr_vol >= len(list_volume) and ptr_alpha >= len(list_alpha):
+                break
 
         # -------- 8. 应用分页（在混合排序后） --------
         offset = (page - 1) * pageSize
