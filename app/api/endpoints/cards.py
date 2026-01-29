@@ -185,8 +185,11 @@ async def get_card_list(
                 # 如未来为 Market 建表并建立关系，可在此添加 selectinload(EventCard.markets)
             )
             .where(EventCard.is_active == True)
+            .where(EventCard.is_active.isnot(None))  # 排除 NULL
             .where(EventCard.is_closed == False)
+            .where(EventCard.is_closed.isnot(None))  # 排除 NULL
             .where(EventCard.is_archived == False)
+            .where(EventCard.is_archived.isnot(None))  # 排除 NULL
             .where(EventCard.id.not_in(sports_tag_subquery))  # 过滤 sports
         )
 
