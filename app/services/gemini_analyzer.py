@@ -63,10 +63,7 @@ class GeminiAnalyzer:
 
     def _construct_prompt(self, event_data: Dict[str, Any]) -> str:
         """
-        构建 Prompt (基于 Red-Team Forecaster 逻辑)
-        
-        Args:
-            event_data: 包含 title, markets 等字段的事件数据
+        构建 Prompt (增强版：强制要求数据支撑，拒绝废话)
         """
         current_time = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
         
@@ -76,7 +73,8 @@ class GeminiAnalyzer:
         for m in markets:
             market_id = m.get("id", m.get("polymarket_id", ""))
             question = m.get("question", "")
-            # 获取概率 - 可能来自 outcomePrices 或 probability
+            
+            # 尝试获取概率/价格
             probability = 0.0
             outcome_prices = m.get("outcomePrices", [])
             if outcome_prices:
@@ -95,12 +93,12 @@ class GeminiAnalyzer:
             - Current Probability: {probability:.2f}
             """
 
-        # 核心 Prompt (Red-Team Forecaster)
+        # 核心 Prompt (Red-Team Forecaster - Anti-Fluff Version)
         prompt = f"""
         Role: You are a Red-Team Forecaster for a prediction market platform.
         Current Time: {current_time}
 
-        Goal: Analyze the following Polymarket Event and its markets. Use Google Search to find "Hard Data" (official filings, laws, polls) that contradicts the crowd sentiment.
+        Goal: Analyze the following Polymarket Event and its markets. Use Google Search to find "Hard Data" (official filings, laws, polls, historical stats) that contradicts the crowd sentiment.
 
         Input Event:
         Title: {event_data.get("title", "")}
@@ -110,16 +108,29 @@ class GeminiAnalyzer:
 
         Analysis Requirements (The "Forensic" Approach):
         1. **Executive Summary**: One precise sentence (max 20 words) capturing the macro-anchor.
-        2. **For EACH Market**, identify:
-           - **Structural Anchor**: The primary hard-data constraint (e.g., specific law, math).
-           - **The Noise**: What sentiment is driving the current price?
-           - **The Barrier**: Specific regulatory or logical hurdles.
-           - **The Blindspot**: Why the crowd is wrong.
-           - **Calibrated Probability**: Your AI-adjusted probability (0.0 to 1.0).
+        
+        2. **For EACH Market**, provide a RED-TEAM analysis. 
+           **CRITICAL INSTRUCTION**: You must be SPECIFIC. Do not write generic statements.
+           
+           - **Structural Anchor**: MUST cite a specific statistic, historical precedent, math probability, or legal clause.
+             - ⛔ BAD: "Rules say someone must win." / "It depends on votes."
+             - ✅ GOOD: "Since 1980, no incumbent with <40% approval has won re-election."
+             - ✅ GOOD: "SEC filing form S-1 requires 30 days clearance, making a Jan launch impossible."
+           
+           - **The Noise**: What SPECIFIC news headline or social media hype is distorting the price?
+             - ⛔ BAD: "Market sentiment is mixed."
+             - ✅ GOOD: "Viral rumors about a settlement on Twitter are ignoring the judge's latest scheduling order."
+           
+           - **The Barrier**: A tangible, hard hurdle.
+             - ⛔ BAD: "They need to play better."
+             - ✅ GOOD: "Cap space is -$15M, preventing key signings."
+           
+           - **The Blindspot**: What data point is the crowd ignoring?
+           
+           - **Calibrated Probability**: Your fair-value probability (0.0 to 1.0).
            - **Confidence**: 0-10 score.
 
-        OUTPUT FORMAT:
-        You MUST return valid JSON matching this structure exactly:
+        OUTPUT FORMAT (Strict JSON):
         {{
             "executive_summary": "string",
             "markets": {{
