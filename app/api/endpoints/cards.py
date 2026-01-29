@@ -232,24 +232,46 @@ async def get_card_list(
         t_query_build_end = time.perf_counter()
         print(f"📋 [Step 0] 查询构建耗时: {(t_query_build_end - t_query_build_start) * 1000:.2f}ms")
 
-        # -------- 2. 优化 Count 查询：直接计数，避免子查询和排序 --------
+        # -------- 2. Count 查询：与 base_query 过滤条件一致 --------
         t_count_start = time.perf_counter()
-        # 构建干净的 count 查询，完全不依赖 base_query，避免任何子查询开销
+        # 基础过滤条件（与 base_query 一致）
+        base_filters = [
+            EventCard.is_active == True,
+            EventCard.is_active.isnot(None),
+            EventCard.is_closed == False,
+            EventCard.is_closed.isnot(None),
+            EventCard.is_archived == False,
+            EventCard.is_archived.isnot(None),
+        ]
+        
         if tagId:
             # 标签过滤：使用 COUNT(DISTINCT) 避免 JOIN 导致的重复计数
             count_query = (
                 select(func.count(func.distinct(EventCard.id)))
                 .select_from(EventCard)
+                .outerjoin(
+                    sports_card_tags,
+                    (EventCard.id == sports_card_tags.c.card_id) & 
+                    (sports_card_tags.c.tag_id.in_(select(Tag.id).where(Tag.name.ilike("%sport%"))))
+                )
                 .join(card_tags, EventCard.id == card_tags.c.card_id)
                 .join(Tag, card_tags.c.tag_id == Tag.id)
-                .where(EventCard.is_active == True)
+                .where(*base_filters)
+                .where(sports_card_tags.c.card_id.is_(None))
                 .where(Tag.polymarket_id == str(tagId))
             )
         else:
-            # 无过滤：直接计数，最简单最快
+            # 无标签过滤：排除 sports + 基础过滤
             count_query = (
-                select(func.count(EventCard.id))
-                .where(EventCard.is_active == True)
+                select(func.count(func.distinct(EventCard.id)))
+                .select_from(EventCard)
+                .outerjoin(
+                    sports_card_tags,
+                    (EventCard.id == sports_card_tags.c.card_id) & 
+                    (sports_card_tags.c.tag_id.in_(select(Tag.id).where(Tag.name.ilike("%sport%"))))
+                )
+                .where(*base_filters)
+                .where(sports_card_tags.c.card_id.is_(None))
             )
         
         # 直接执行 count 查询
@@ -323,35 +345,30 @@ async def get_card_list(
         t_snap_end = time.perf_counter()
         print(f"🔄 [Step 3 Total] Snapshot 处理总耗时: {(t_snap_end - t_snap_start) * 1000:.2f}ms")
 
-        # -------- 7. 混合加权排序：volume + AI alpha (优化版) --------
+        # -------- 7. 混合加权排序：volume + AI alpha (性能优化版) --------
         t_sort_start = time.perf_counter()
 
-        def _normalize_prob(val):
+        def _normalize_prob(val) -> float:
             """归一化概率到 0.0-1.0 范围"""
             if val is None:
                 return 0.0
             v = float(val)
             if v > 1.0:
                 v = v / 100.0
-            return max(0.0, min(1.0, v))  # 确保在 [0, 1] 范围内
+            return max(0.0, min(1.0, v))
 
-        def get_volume_score(card):
-            return float(card.get("volume") or 0)
-
-        def get_weighted_alpha_score(card):
-            """
-            计算加权 alpha 分数 = volume × max_diff
-            归一化所有概率到 0.0-1.0 后计算差值
-            """
-            try:
-                vol = float(card.get("volume") or 0)
-                if vol == 0:
-                    return 0
+        # === 预计算阶段：一次性为所有卡片计算分数，避免 sorted() 内重复计算 ===
+        for card in card_data_list:
+            # 1. Volume Score（显式 float 转换）
+            vol = float(card.get("volume") or 0)
+            card["_volume_score"] = round(vol, 2)
+            
+            # 2. Alpha Score = volume × max_diff（预计算归一化差值）
+            alpha_score = 0.0
+            if vol > 0:
                 diffs = []
                 for m in card.get("markets", []):
-                    # 归一化 market probability
                     prob = _normalize_prob(m.get("probability", 0.0))
-                    # 归一化 AI adjusted probability
                     adj_prob = m.get("ai_adjusted_probability") or m.get("adjustedProbability")
                     if adj_prob is None:
                         curr_ai = prob  # 无 AI 数据时，diff = 0
@@ -359,16 +376,16 @@ async def get_card_list(
                         curr_ai = _normalize_prob(adj_prob)
                     diff = abs(prob - curr_ai)
                     diffs.append(diff)
-                # 取最大的两个差值（如果有多个 market）
+                # 取最大的两个差值
                 diffs.sort(reverse=True)
                 top_diffs = diffs[:2] if len(diffs) >= 2 else diffs
-                return vol * sum(top_diffs)
-            except:
-                return 0
+                # 显式 float 转换 + round 防止 Decimal 精度抖动
+                alpha_score = round(float(vol) * float(sum(top_diffs)), 2)
+            card["_alpha_score"] = alpha_score
 
-        # 生成两份独立排序列表
-        list_volume = sorted(card_data_list, key=get_volume_score, reverse=True)
-        list_alpha = sorted(card_data_list, key=get_weighted_alpha_score, reverse=True)
+        # === 排序阶段：直接使用预计算的分数（O(1) 访问） ===
+        list_volume = sorted(card_data_list, key=lambda c: c["_volume_score"], reverse=True)
+        list_alpha = sorted(card_data_list, key=lambda c: c["_alpha_score"], reverse=True)
 
         # 调试：打印前 5 名的排序情况
         print(f"   📊 Volume Top5: {[c.get('id')[:8] + '...' for c in list_volume[:5]]}")
