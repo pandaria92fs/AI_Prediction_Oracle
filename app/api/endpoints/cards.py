@@ -357,30 +357,36 @@ async def get_card_list(
                 v = v / 100.0
             return max(0.0, min(1.0, v))
 
-        # === 预计算阶段：一次性为所有卡片计算分数，避免 sorted() 内重复计算 ===
+        # === 预计算阶段：一次性为所有卡片计算分数 ===
+        # 排序规则：
+        #   - 奇数坑位 (1, 3, 5, 7...): Volume DESC
+        #   - 偶数坑位 (2, 4, 6, 8...): Volume × sum(Top2 |AI - Market|) DESC
         for card in card_data_list:
-            # 1. Volume Score（显式 float 转换）
+            # 1. Volume Score（用于奇数坑位排序）
             vol = float(card.get("volume") or 0)
             card["_volume_score"] = round(vol, 2)
             
-            # 2. Alpha Score = volume × max_diff（预计算归一化差值）
+            # 2. Alpha Score = Volume × sum(Top2 Diffs)（用于偶数坑位排序）
+            # 只计算 Top 2 个最大的 |AI odds - Market odds| 差值
             alpha_score = 0.0
             if vol > 0:
                 diffs = []
                 for m in card.get("markets", []):
-                    prob = _normalize_prob(m.get("probability", 0.0))
-                    adj_prob = m.get("ai_adjusted_probability") or m.get("adjustedProbability")
-                    if adj_prob is None:
-                        curr_ai = prob  # 无 AI 数据时，diff = 0
+                    # Market odds (归一化到 0-1)
+                    market_odds = _normalize_prob(m.get("probability", 0.0))
+                    # AI odds (归一化到 0-1)
+                    ai_odds = m.get("ai_adjusted_probability") or m.get("adjustedProbability")
+                    if ai_odds is None:
+                        ai_odds = market_odds  # 无 AI 数据时，diff = 0
                     else:
-                        curr_ai = _normalize_prob(adj_prob)
-                    diff = abs(prob - curr_ai)
+                        ai_odds = _normalize_prob(ai_odds)
+                    diff = abs(ai_odds - market_odds)
                     diffs.append(diff)
-                # 取最大的两个差值
+                # ⚠️ 只取 Top 2 个最大差值
                 diffs.sort(reverse=True)
-                top_diffs = diffs[:2] if len(diffs) >= 2 else diffs
-                # 显式 float 转换 + round 防止 Decimal 精度抖动
-                alpha_score = round(float(vol) * float(sum(top_diffs)), 2)
+                top2_diffs = diffs[:2]  # 最多取 2 个
+                # Alpha = Volume × sum(Top2 Diffs)
+                alpha_score = round(float(vol) * float(sum(top2_diffs)), 2)
             card["_alpha_score"] = alpha_score
 
         # === 验证阶段：确保预计算分数无 None ===
@@ -403,7 +409,12 @@ async def get_card_list(
         overlap_count = len(set(vol_top10_ids) & set(alpha_top10_ids))
         print(f"   🔍 Top10 重叠度: {overlap_count}/10 (相同事件数)")
 
-        # 精确交替插值：Index 0 -> volume[0], Index 1 -> alpha[0], Index 2 -> volume[1], ...
+        # 精确交替插值（坑位从 1 开始计数）：
+        #   坑位 1 (idx 0): list_volume[0] - 奇数坑位，Volume 最高
+        #   坑位 2 (idx 1): list_alpha[0]  - 偶数坑位，Alpha 最高
+        #   坑位 3 (idx 2): list_volume[1] - 奇数坑位
+        #   坑位 4 (idx 3): list_alpha[1]  - 偶数坑位
+        #   ...
         final_list = []
         used_ids = set()
         ptr_vol, ptr_alpha = 0, 0
