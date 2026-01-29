@@ -383,13 +383,25 @@ async def get_card_list(
                 alpha_score = round(float(vol) * float(sum(top_diffs)), 2)
             card["_alpha_score"] = alpha_score
 
+        # === 验证阶段：确保预计算分数无 None ===
+        for card in card_data_list:
+            assert card.get("_volume_score") is not None, f"_volume_score is None for {card.get('id')}"
+            assert card.get("_alpha_score") is not None, f"_alpha_score is None for {card.get('id')}"
+            assert isinstance(card["_alpha_score"], (int, float)), f"_alpha_score is not float: {type(card['_alpha_score'])}"
+
         # === 排序阶段：直接使用预计算的分数（O(1) 访问） ===
         list_volume = sorted(card_data_list, key=lambda c: c["_volume_score"], reverse=True)
         list_alpha = sorted(card_data_list, key=lambda c: c["_alpha_score"], reverse=True)
 
-        # 调试：打印前 5 名的排序情况
-        print(f"   📊 Volume Top5: {[c.get('id')[:8] + '...' for c in list_volume[:5]]}")
-        print(f"   📊 Alpha Top5:  {[c.get('id')[:8] + '...' for c in list_alpha[:5]]}")
+        # 调试：打印前 5 名的排序情况（含分数）
+        print(f"   📊 Volume Top5: {[(c.get('id')[:8], c['_volume_score']) for c in list_volume[:5]]}")
+        print(f"   📊 Alpha Top5:  {[(c.get('id')[:8], c['_alpha_score']) for c in list_alpha[:5]]}")
+        
+        # 验证：检查 Volume 和 Alpha Top10 是否完全一致（用于测试去重逻辑）
+        vol_top10_ids = [c.get('id') for c in list_volume[:10]]
+        alpha_top10_ids = [c.get('id') for c in list_alpha[:10]]
+        overlap_count = len(set(vol_top10_ids) & set(alpha_top10_ids))
+        print(f"   🔍 Top10 重叠度: {overlap_count}/10 (相同事件数)")
 
         # 精确交替插值：Index 0 -> volume[0], Index 1 -> alpha[0], Index 2 -> volume[1], ...
         final_list = []
