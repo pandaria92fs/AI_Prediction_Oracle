@@ -110,13 +110,18 @@ async def show_stats():
         print(f"   脏数据: {total - valid}")
 
 
-if __name__ == "__main__":
+async def main():
+    """主函数"""
     print("=" * 50)
     print("🧹 EventCard 脏数据清理脚本")
     print("=" * 50)
     print("\n条件: active=True AND closed=False AND archived=False")
     print("不满足以上条件的记录将被删除\n")
     
-    asyncio.run(show_stats())
+    await show_stats()
     print()
-    asyncio.run(clean_inactive_events())
+    await clean_inactive_events()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
