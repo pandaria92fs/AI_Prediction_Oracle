@@ -169,28 +169,30 @@ async def get_card_list(
         # -------- 1. 构建基础查询（用于列表数据），并预加载关系以避免 N+1 --------
         t_query_build_start = time.perf_counter()
         
-        # 子查询：找出所有包含 sports 标签的 card_id
-        sports_tag_subquery = (
-            select(card_tags.c.card_id)
-            .join(Tag, card_tags.c.tag_id == Tag.id)
-            .where(Tag.name.ilike("%sport%"))
-        ).scalar_subquery()
+        # 优化：使用 LEFT JOIN + IS NULL 代替 NOT IN（性能更好）
+        # 子查询：找出 sports 标签的 ID
+        from sqlalchemy.orm import aliased
+        sports_card_tags = aliased(card_tags, name="sports_ct")
+        sports_tag_ids = select(Tag.id).where(Tag.name.ilike("%sport%")).scalar_subquery()
         
         base_query = (
             select(EventCard)
+            .outerjoin(
+                sports_card_tags,
+                (EventCard.id == sports_card_tags.c.card_id) & 
+                (sports_card_tags.c.tag_id.in_(select(Tag.id).where(Tag.name.ilike("%sport%"))))
+            )
             .options(
                 selectinload(EventCard.tags),
-                selectinload(EventCard.predictions),  # 预加载 AI 预测，用于获取 aiLogicSummary
-                # 目前 markets 来源于 EventSnapshot.raw_data，这里没有 ORM 关系可预加载
-                # 如未来为 Market 建表并建立关系，可在此添加 selectinload(EventCard.markets)
+                selectinload(EventCard.predictions),
             )
             .where(EventCard.is_active == True)
-            .where(EventCard.is_active.isnot(None))  # 排除 NULL
+            .where(EventCard.is_active.isnot(None))
             .where(EventCard.is_closed == False)
-            .where(EventCard.is_closed.isnot(None))  # 排除 NULL
+            .where(EventCard.is_closed.isnot(None))
             .where(EventCard.is_archived == False)
-            .where(EventCard.is_archived.isnot(None))  # 排除 NULL
-            .where(EventCard.id.not_in(sports_tag_subquery))  # 过滤 sports
+            .where(EventCard.is_archived.isnot(None))
+            .where(sports_card_tags.c.card_id.is_(None))  # 排除有 sports 标签的
         )
 
         # 标签过滤（使用 Polymarket 原始 tag id）

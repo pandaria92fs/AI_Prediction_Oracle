@@ -80,16 +80,18 @@ async def get_cards(
     """
     offset = (page - 1) * pageSize
     
-    # 子查询：找出所有包含 sports 标签的 card_id
-    sports_tag_subquery = (
-        select(card_tags.c.card_id)
-        .join(Tag, card_tags.c.tag_id == Tag.id)
-        .where(Tag.name.ilike("%sport%"))
-    ).scalar_subquery()
+    # 优化：使用 LEFT JOIN + IS NULL 代替 NOT IN（性能更好）
+    from sqlalchemy.orm import aliased
+    sports_card_tags = aliased(card_tags, name="sports_ct")
     
     # 构建基础查询，预加载 predictions 关系，并过滤 sports
     query = (
         select(EventCard)
+        .outerjoin(
+            sports_card_tags,
+            (EventCard.id == sports_card_tags.c.card_id) & 
+            (sports_card_tags.c.tag_id.in_(select(Tag.id).where(Tag.name.ilike("%sport%"))))
+        )
         .options(selectinload(EventCard.predictions))
         .where(EventCard.is_active == True)
         .where(EventCard.is_active.isnot(None))
@@ -97,7 +99,7 @@ async def get_cards(
         .where(EventCard.is_closed.isnot(None))
         .where(EventCard.is_archived == False)
         .where(EventCard.is_archived.isnot(None))
-        .where(EventCard.id.not_in(sports_tag_subquery))  # 过滤 sports
+        .where(sports_card_tags.c.card_id.is_(None))  # 排除有 sports 标签的
     )
     
     # 如果传了 tag_id，从 EventSnapshot 的 raw_data JSONB 中过滤
