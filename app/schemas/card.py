@@ -153,8 +153,9 @@ class CardData(BaseModel):
     icon: Optional[str] = Field(default=None, validation_alias="image_url")
     volume: Optional[float] = None
     liquidity: Optional[float] = None
-    active: bool = True
-    closed: bool = False
+    active: bool = Field(default=True, validation_alias="is_active")
+    closed: bool = Field(default=False, validation_alias="is_closed")
+    archived: bool = Field(default=False, validation_alias="is_archived")
     startDate: Optional[str] = None
     endDate: Optional[str] = None
     createdAt: Optional[datetime] = None

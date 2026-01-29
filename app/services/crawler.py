@@ -197,6 +197,8 @@ class PolymarketCrawler:
                             volume=volume,
                             end_date=end_date,
                             is_active=event.get("active", True),
+                            is_closed=event.get("closed", False),
+                            is_archived=event.get("archived", False),
                             updated_at=datetime.utcnow(),
                         ).on_conflict_do_update(
                             index_elements=["polymarket_id"],
@@ -205,7 +207,9 @@ class PolymarketCrawler:
                                 "volume": volume,
                                 "updated_at": datetime.utcnow(),
                                 "image_url": image_url,
-                                "is_active": event.get("active", True)
+                                "is_active": event.get("active", True),
+                                "is_closed": event.get("closed", False),
+                                "is_archived": event.get("archived", False),
                             },
                         )
                     )
