@@ -174,7 +174,7 @@ class CardData(BaseModel):
         同步标签到 markets，并对 markets 进行过滤与排序：
         1. 将父级 tags 的 id 同步到每个 market 的 tagIds（如果其为空）
         2. 仅保留 active=True 且 archived=False 的 markets
-        3. 按 volume 降序排序（与卡片列表排序逻辑一致）
+        3. 按概率降序排序（内部展示概率最高的结果）
         """
         if not self.markets:
             return self
@@ -193,9 +193,10 @@ class CardData(BaseModel):
             if m.active is True and getattr(m, "archived", False) is False
         ]
 
-        # 3. 排序：按 volume 降序（与卡片列表排序逻辑一致，高交易量的 market 排前面）
+        # 3. 核心排序：概率优先 (Probability DESC)
+        # 虽然外部卡片可能是按 Volume 排进来的，但内部第一行展示概率最高的结果
         valid_markets.sort(
-            key=lambda x: (x.volume or 0.0),
+            key=lambda x: (x.probability, x.volume or 0.0),  # 概率为主，Volume 为辅
             reverse=True,
         )
 
