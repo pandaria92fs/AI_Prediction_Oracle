@@ -62,35 +62,40 @@ class GeminiAnalyzer:
         )
 
     def _construct_prompt(self, event_data: Dict[str, Any]) -> str:
+        """
+        构建 Prompt (V4 最终版：审计员模式 + 锚定效应 + 格式化增强)
+        """
         current_time = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
         
-        # 1. 【关键】用循环处理所有 Market，防止只分析一个
+        # 1. 市场数据循环处理 (关键修复：支持 calculated_odds 并同时显示 %)
         markets_text = ""
         markets = event_data.get("markets", [])
         for m in markets:
             market_id = m.get("id", m.get("polymarket_id", ""))
             question = m.get("question", "")
             
-            # 安全获取概率
+            # 优先级逻辑：预处理赔率 > 原始 outcomePrices > 原始 probability
             probability = 0.0
             if "calculated_odds" in m:
                 probability = m["calculated_odds"]
             else:
-                # 兼容旧逻辑
                 outcome_prices = m.get("outcomePrices", [])
                 if outcome_prices:
                     try:
-                        if isinstance(outcome_prices, str): outcome_prices = json.loads(outcome_prices)
+                        if isinstance(outcome_prices, str):
+                            outcome_prices = json.loads(outcome_prices)
                         probability = float(outcome_prices[0])
-                    except: probability = m.get("probability", 0.0)
+                    except:
+                        probability = m.get("probability", 0.0)
             
+            # 格式化：同时显示 0.65 和 65.0%
             markets_text += f"""
             - Market ID: {market_id}
             - Question: {question}
             - Current Probability: {probability:.2f} ({probability*100:.1f}%)
             """
 
-        # 2. 【核心】融合了审计员思维 + 锚定效应的 V4 Prompt
+        # 2. V4 核心 Prompt：审计员 + 锚定效应 + 严格约束
         prompt = f"""
         Role: You are a Senior Risk Manager at a Hedge Fund. 
         Current Time: {current_time}
@@ -114,10 +119,11 @@ class GeminiAnalyzer:
            - "Smoking Gun" (Fatal flaw)? -> Large adjustment (e.g., -20%).
            
         **Sanity Check**: 
-        - If Market Odds > 60% and you predict < 10%, YOU ARE LIKELY WRONG unless the team has been disqualified or the event cancelled.
+        - If Market Odds > 60% and you predict < 10%, YOU ARE LIKELY WRONG unless the team has been disqualified or the event cancelled. 
+        - Do not be overly conservative just because the event is far in the future.
 
         Analysis Requirements (The "Auditor" Standard):
-        1. **Executive Summary**: One ruthless sentence (max 20 words) citing the biggest macro-factor.
+        1. **Executive Summary**: One ruthless sentence (max 20 words) citing the biggest macro-factor (e.g., "Fed Rate Cut", "QB Injury", "SEC Deadline").
 
         2. **For EACH Market**, provide a forensic breakdown:
            
@@ -128,7 +134,7 @@ class GeminiAnalyzer:
            - **The Noise (Overreaction)**: 
              * What SPECIFIC headline/hype is inflating the price?
              * ⛔ BAD: "Sentiment is mixed."
-             * ✅ GOOD: "Viral rumors about a settlement ignoring the judge's order."
+             * ✅ GOOD: "Viral rumors about a settlement on Twitter are ignoring the judge's latest scheduling order."
            
            - **The Barrier (The Risk)**: 
              * Specific hurdle (Injury, Law, Math).
