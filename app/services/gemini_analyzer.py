@@ -6,6 +6,7 @@ Gemini AI Analyzer Service
 import os
 import re
 import json
+import asyncio
 import logging
 from datetime import datetime
 from typing import Optional, Dict, Any
@@ -137,12 +138,14 @@ class GeminiAnalyzer:
         """
         return prompt
 
-    async def analyze_event(self, event_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def analyze_event(self, event_data: Dict[str, Any], max_retries: int = 3, retry_delay: float = 2.0) -> Optional[Dict[str, Any]]:
         """
-        主入口：分析单个事件
+        主入口：分析单个事件（带重试机制）
         
         Args:
             event_data: 包含 title, description, markets 等字段的事件数据
+            max_retries: 最大重试次数，默认 3 次
+            retry_delay: 重试间隔秒数，默认 2 秒
             
         Returns:
             分析结果字典，格式：
@@ -166,41 +169,50 @@ class GeminiAnalyzer:
             logger.error("❌ GEMINI_API_KEY not configured")
             return None
 
-        try:
-            model = self._get_model()
-            prompt = self._construct_prompt(event_data)
-            
-            event_title = event_data.get("title", "Unknown")
-            logger.info(f"🤖 Calling Gemini for event: {event_title}...")
-            
-            # 异步调用 Gemini
-            response = await model.generate_content_async(prompt)
-            
-            # 解析 JSON (带容错)
-            raw_text = response.text
+        event_title = event_data.get("title", "Unknown")
+        model = self._get_model()
+        prompt = self._construct_prompt(event_data)
+        
+        last_error = None
+        
+        for attempt in range(1, max_retries + 1):
             try:
-                result_json = json.loads(raw_text)
-            except json.JSONDecodeError:
-                # 尝试修复并重新解析
-                fixed_text = _fix_json_string(raw_text)
+                logger.info(f"🤖 Calling Gemini for: {event_title[:30]}... (attempt {attempt}/{max_retries})")
+                
+                # 异步调用 Gemini
+                response = await model.generate_content_async(prompt)
+                
+                # 解析 JSON (带容错)
+                raw_text = response.text
                 try:
-                    result_json = json.loads(fixed_text)
-                    logger.warning("⚠️ JSON was malformed, auto-fixed successfully")
-                except json.JSONDecodeError as e2:
-                    # 记录前500字符用于调试
-                    logger.error(f"❌ JSON parse failed after fix attempt: {e2}")
-                    logger.error(f"Raw response (first 500 chars): {raw_text[:500]}")
-                    return None
-            
-            logger.info("✅ Gemini analysis complete.")
-            return result_json
+                    result_json = json.loads(raw_text)
+                except json.JSONDecodeError:
+                    # 尝试修复并重新解析
+                    fixed_text = _fix_json_string(raw_text)
+                    try:
+                        result_json = json.loads(fixed_text)
+                        logger.warning("⚠️ JSON was malformed, auto-fixed successfully")
+                    except json.JSONDecodeError as e2:
+                        # JSON 解析失败，记录并重试
+                        logger.warning(f"⚠️ JSON parse failed (attempt {attempt}): {e2}")
+                        last_error = e2
+                        if attempt < max_retries:
+                            await asyncio.sleep(retry_delay)
+                        continue
+                
+                logger.info("✅ Gemini analysis complete.")
+                return result_json
 
-        except json.JSONDecodeError as e:
-            logger.error(f"❌ Failed to parse Gemini response as JSON: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"❌ Gemini Analysis Failed: {e}")
-            return None
+            except Exception as e:
+                last_error = e
+                logger.warning(f"⚠️ Gemini call failed (attempt {attempt}): {e}")
+                if attempt < max_retries:
+                    await asyncio.sleep(retry_delay)
+                continue
+        
+        # 所有重试都失败
+        logger.error(f"❌ Gemini Analysis Failed after {max_retries} attempts: {last_error}")
+        return None
 
     def transform_to_raw_analysis(self, gemini_result: Dict[str, Any]) -> Dict[str, Any]:
         """
