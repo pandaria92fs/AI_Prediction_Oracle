@@ -310,53 +310,61 @@ async def get_card_list(
 
         # -------- 7. 交替排序：单数位置按 volume，双数位置按 AI 差值 --------
         t_sort_start = time.perf_counter()
-        
+
         def calc_ai_diff(card_dict):
-            """计算 AI 预测与原始数据的差值绝对值之和"""
+            """计算 AI 预测与原始数据的双边差值绝对值之和"""
             total_diff = 0.0
             markets = card_dict.get("markets", [])
             for m in markets:
-                prob = m.get("probability", 0) or 0
-                adj_prob = m.get("adjustedProbability", prob) or prob
-                # 计算单个市场的差值（原始和 AI 都有 Yes/No 两面）
-                diff = abs(prob - adj_prob)
-                total_diff += diff * 2  # Yes 和 No 的差值总和
+                try:
+                    # ✅ 修复：直接取我们刚注入的 probability
+                    prob = float(m.get("probability", 0) or 0)
+                    
+                    # ✅ 修复：使用正确的 key "ai_adjusted_probability"
+                    # 如果 AI 数据不存在，则回退到 prob，diff 为 0
+                    adj_prob = float(m.get("ai_adjusted_probability", prob) or prob)
+                    
+                    # 核心公式：|Market - AI|
+                    diff = abs(prob - adj_prob)
+                    
+                    # 累加双边差值 (diff * 2)
+                    total_diff += (diff * 2)
+                except (ValueError, TypeError):
+                    continue
             return total_diff
+
+        # 1. 生成两份独立的排序列表
+        # List A: 按 Volume 降序 (代表热度)
+        volume_sorted = sorted(card_data_list, key=lambda x: float(x.get("volume") or 0), reverse=True)
         
-        # 按 volume 降序排序的列表
-        volume_sorted = sorted(card_data_list, key=lambda x: x.get("volume") or 0, reverse=True)
-        
-        # 按 AI 差值降序排序的列表（差值越大越有"洞察"）
+        # List B: 按 AI Diff 降序 (代表机会/偏差)
         diff_sorted = sorted(card_data_list, key=calc_ai_diff, reverse=True)
-        
-        # 去重集合，防止重复添加
-        used_ids = set()
+
+        # 2. 拉链式合并 (Zipper Merge) - 安全版
         interleaved_list = []
+        used_ids = set()
         
-        vol_idx, diff_idx = 0, 0
-        position = 1  # 从位置 1 开始
-        
-        while len(interleaved_list) < len(card_data_list):
-            if position % 2 == 1:  # 单数位置：volume
-                while vol_idx < len(volume_sorted):
-                    card = volume_sorted[vol_idx]
-                    vol_idx += 1
-                    card_id = card.get("id")
-                    if card_id not in used_ids:
-                        used_ids.add(card_id)
-                        interleaved_list.append(card)
-                        break
-            else:  # 双数位置：AI 差值
-                while diff_idx < len(diff_sorted):
-                    card = diff_sorted[diff_idx]
-                    diff_idx += 1
-                    card_id = card.get("id")
-                    if card_id not in used_ids:
-                        used_ids.add(card_id)
-                        interleaved_list.append(card)
-                        break
-            position += 1
-        
+        # 取最大长度，确保遍历完所有元素
+        max_len = max(len(volume_sorted), len(diff_sorted))
+
+        for i in range(max_len):
+            # --- 奇数位置 (1, 3, 5...) -> 尝试添加 Volume 榜单的第 i 个 ---
+            if i < len(volume_sorted):
+                card = volume_sorted[i]
+                card_id = card.get("id")
+                if card_id not in used_ids:
+                    interleaved_list.append(card)
+                    used_ids.add(card_id)
+            
+            # --- 偶数位置 (2, 4, 6...) -> 尝试添加 Diff 榜单的第 i 个 ---
+            if i < len(diff_sorted):
+                card = diff_sorted[i]
+                card_id = card.get("id")
+                if card_id not in used_ids:
+                    interleaved_list.append(card)
+                    used_ids.add(card_id)
+
+        # 更新最终列表
         card_data_list = interleaved_list
         t_sort_end = time.perf_counter()
         print(f"🔀 [Step 4] 交替排序耗时: {(t_sort_end - t_sort_start) * 1000:.2f}ms")

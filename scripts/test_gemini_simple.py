@@ -28,7 +28,7 @@ async def test():
     print("🤖 正在尝试连接 Gemini...")
     
     try:
-        model = genai.GenerativeModel("gemini-3-pro-preview")  # 最新最强大模型
+        model = genai.GenerativeModel("gemini-1.5-pro")  # 或者 gemini-1.5-flash
         response = await model.generate_content_async(
             "Hello! Reply with strict JSON: {'status': 'ok'}"
         )
