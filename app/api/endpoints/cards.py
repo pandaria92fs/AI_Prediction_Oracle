@@ -54,13 +54,9 @@ def _extract_markets_from_raw_data(raw_data: dict, ai_markets: dict = None) -> l
             if "ai_calibrated_odds_pct" in ai_data:
                 market_data["ai_adjusted_probability"] = float(ai_data["ai_calibrated_odds_pct"])
             
-            # 2. AI 置信度 (confidence_score 可能是 0-10 或 0-100)
+            # 2. AI 置信度 (1-10)
             if "ai_confidence" in ai_data:
-                confidence = float(ai_data["ai_confidence"])
-                # 如果是 0-10 范围，转换为 0-100
-                if confidence <= 10:
-                    confidence = confidence * 10
-                market_data["ai_confidence"] = confidence
+                market_data["ai_confidence"] = float(ai_data["ai_confidence"])
             
             # 3. AI 分析详情 (支持多种 key 格式)
             market_data["ai_analysis_data"] = {
