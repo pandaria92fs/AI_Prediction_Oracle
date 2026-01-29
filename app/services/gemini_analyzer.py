@@ -93,12 +93,14 @@ class GeminiAnalyzer:
             - Current Probability: {probability:.2f}
             """
 
-        # 核心 Prompt (Red-Team Forecaster - Anti-Fluff Version)
+        # V4 Prompt: Market-Anchored Calibration
         prompt = f"""
-        Role: You are a Red-Team Forecaster for a prediction market platform.
+        Role: You are a Senior Risk Manager at a Hedge Fund. 
         Current Time: {current_time}
 
-        Goal: Analyze the following Polymarket Event and its markets. Use Google Search to find "Hard Data" (official filings, laws, polls, historical stats) that contradicts the crowd sentiment.
+        Task: AUDIT the current prediction market odds. 
+        **CRITICAL RULE**: The market is "Efficient" by default. The Current Probability is your STARTING ANCHOR. 
+        Do NOT invent a probability from scratch. You only adjust the market price up or down based on "Alpha" (new information the market hasn't priced in).
 
         Input Event:
         Title: {event_data.get("title", "")}
@@ -106,36 +108,48 @@ class GeminiAnalyzer:
         Markets:
         {markets_text}
 
-        Analysis Requirements (The "Forensic" Approach):
-        1. **Executive Summary**: One precise sentence (max 20 words) capturing the macro-anchor.
-        
-        2. **For EACH Market**, provide a RED-TEAM analysis. 
-           **CRITICAL INSTRUCTION**: You must be SPECIFIC. Do not write generic statements.
+        Analysis Framework (The "Delta" Method):
+        1. **Start with Market Odds**.
+        2. **Search for Contradictions**: Is there breaking news, injury reports, or legal filings that the market ignores?
+        3. **Apply Adjustment**:
+           - No new info? -> Keep AI Odds close to Market Odds (e.g., Market 65% -> AI 63-67%).
+           - Minor friction? -> Small adjustment (e.g., -5%).
+           - "Smoking Gun" (Fatal flaw)? -> Large adjustment (e.g., -20%).
            
-           - **Structural Anchor**: MUST cite a specific statistic, historical precedent, math probability, or legal clause.
-             - ⛔ BAD: "Rules say someone must win." / "It depends on votes."
-             - ✅ GOOD: "Since 1980, no incumbent with <40% approval has won re-election."
-             - ✅ GOOD: "SEC filing form S-1 requires 30 days clearance, making a Jan launch impossible."
+        **Sanity Check**: 
+        - If Market Odds > 60% and you predict < 10%, YOU ARE LIKELY WRONG unless the team has been disqualified or the event cancelled. 
+        - Do not be overly conservative just because the event is far in the future.
+
+        Analysis Requirements:
+        1. **Executive Summary**: One ruthless sentence (max 20 words) citing the biggest macro-factor.
+
+        2. **For EACH Market**, provide a forensic breakdown:
            
-           - **The Noise**: What SPECIFIC news headline or social media hype is distorting the price?
-             - ⛔ BAD: "Market sentiment is mixed."
-             - ✅ GOOD: "Viral rumors about a settlement on Twitter are ignoring the judge's latest scheduling order."
+           - **Structural Anchor (The Baseline)**: 
+             * State the base assumption supporting the current price. 
+             * Example: "Market prices in dominant 12-win season performance."
            
-           - **The Barrier**: A tangible, hard hurdle.
-             - ⛔ BAD: "They need to play better."
-             - ✅ GOOD: "Cap space is -$15M, preventing key signings."
+           - **The Noise (Overreaction)**: 
+             * What hype is inflating the price?
            
-           - **The Blindspot**: What data point is the crowd ignoring?
+           - **The Barrier (The Risk)**: 
+             * Specific hurdle (Injury, Law, Math).
            
-           - **Calibrated Probability**: Your fair-value probability (0.0 to 1.0).
-           - **Confidence**: 0-10 score.
+           - **The Blindspot (The Edge)**: 
+             * What specific data is the crowd missing?
+           
+           - **Calibrated Probability**: 
+             * YOUR FINAL ADJUSTED ODDS (0.0 - 1.0). 
+             * **Must be relative to the original odds.**
+           
+           - **Confidence**: 0-10 (How confident are you in your *deviation* from the market?).
 
         OUTPUT FORMAT (Strict JSON):
         {{
             "executive_summary": "string",
             "markets": {{
                 "MARKET_ID_HERE": {{
-                    "ai_calibrated_odds": 0.55,
+                    "ai_calibrated_odds": 0.65, 
                     "confidence_score": 8.5,
                     "analysis": {{
                         "structural_anchor": "string",
