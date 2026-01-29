@@ -92,6 +92,7 @@ async def get_cards(
         select(EventCard)
         .options(selectinload(EventCard.predictions))
         .where(EventCard.is_active == True)
+        .where(EventCard.is_closed == False)  # 过滤已关闭
         .where(EventCard.id.not_in(sports_tag_subquery))  # 过滤 sports
     )
     
