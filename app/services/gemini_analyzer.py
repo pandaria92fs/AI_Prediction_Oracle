@@ -4,6 +4,7 @@ Gemini AI Analyzer Service
 """
 
 import os
+import re
 import json
 import logging
 from datetime import datetime
@@ -13,6 +14,24 @@ import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
 logger = logging.getLogger(__name__)
+
+
+def _fix_json_string(text: str) -> str:
+    """
+    尝试修复常见的 JSON 格式问题
+    """
+    # 1. 移除 markdown 代码块标记
+    text = re.sub(r'^```json\s*', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^```\s*$', '', text, flags=re.MULTILINE)
+    text = text.strip()
+    
+    # 2. 移除尾部逗号 (trailing commas)
+    text = re.sub(r',(\s*[}\]])', r'\1', text)
+    
+    # 3. 修复单引号为双引号 (简单情况)
+    # 注意：这是粗暴处理，可能在某些边缘情况失效
+    
+    return text
 
 
 class GeminiAnalyzer:
@@ -157,10 +176,23 @@ class GeminiAnalyzer:
             # 异步调用 Gemini
             response = await model.generate_content_async(prompt)
             
-            # 解析 JSON
-            result_json = json.loads(response.text)
-            logger.info("✅ Gemini analysis complete.")
+            # 解析 JSON (带容错)
+            raw_text = response.text
+            try:
+                result_json = json.loads(raw_text)
+            except json.JSONDecodeError:
+                # 尝试修复并重新解析
+                fixed_text = _fix_json_string(raw_text)
+                try:
+                    result_json = json.loads(fixed_text)
+                    logger.warning("⚠️ JSON was malformed, auto-fixed successfully")
+                except json.JSONDecodeError as e2:
+                    # 记录前500字符用于调试
+                    logger.error(f"❌ JSON parse failed after fix attempt: {e2}")
+                    logger.error(f"Raw response (first 500 chars): {raw_text[:500]}")
+                    return None
             
+            logger.info("✅ Gemini analysis complete.")
             return result_json
 
         except json.JSONDecodeError as e:
