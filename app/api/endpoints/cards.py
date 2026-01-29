@@ -258,23 +258,11 @@ async def get_card_list(
         t_count_end = time.perf_counter()
         print(f"📊 [Step 1] Count 查询耗时: {(t_count_end - t_count_start) * 1000:.2f}ms (Total: {total_count})")
 
-        # -------- 3. 排序（仍在 SQL 层面） --------
-        query = base_query
-        # 注意：liquidity 存储在 raw_data 中，无法直接在 SQL 层面排序
-        # 如果按 liquidity 排序，需要在 Python 层面处理
-        if sortBy == "volume":
-            sort_column = EventCard.volume
-            if order == "desc":
-                query = query.order_by(desc(sort_column))
-            else:
-                query = query.order_by(sort_column)
-        else:  # liquidity - 需要在获取数据后排序
-            # 先按 volume 排序作为默认，然后在 Python 层面重新排序
-            query = query.order_by(desc(EventCard.volume))
-
-        # -------- 4. 分页 --------
-        offset = (page - 1) * pageSize
-        query = query.offset(offset).limit(pageSize)
+        # -------- 3. 排序优化：先按 volume DESC 获取候选集（最热 100 条） --------
+        # 混合排序需要在候选集上进行，而不是直接分页
+        CANDIDATE_POOL_SIZE = 100  # 候选池大小，避免对全库重计算
+        
+        query = base_query.order_by(desc(EventCard.volume)).limit(CANDIDATE_POOL_SIZE)
 
         # -------- 5. 诊断 Main Query (DB + 网络) 耗时 --------
         t_query_start = time.perf_counter()
@@ -335,62 +323,107 @@ async def get_card_list(
         t_snap_end = time.perf_counter()
         print(f"🔄 [Step 3 Total] Snapshot 处理总耗时: {(t_snap_end - t_snap_start) * 1000:.2f}ms")
 
-        # -------- 7. 混合加权排序：volume + AI alpha --------
+        # -------- 7. 混合加权排序：volume + AI alpha (优化版) --------
         t_sort_start = time.perf_counter()
+
+        def _normalize_prob(val):
+            """归一化概率到 0.0-1.0 范围"""
+            if val is None:
+                return 0.0
+            v = float(val)
+            if v > 1.0:
+                v = v / 100.0
+            return max(0.0, min(1.0, v))  # 确保在 [0, 1] 范围内
 
         def get_volume_score(card):
             return float(card.get("volume") or 0)
 
         def get_weighted_alpha_score(card):
+            """
+            计算加权 alpha 分数 = volume × max_diff
+            归一化所有概率到 0.0-1.0 后计算差值
+            """
             try:
                 vol = float(card.get("volume") or 0)
-                if vol == 0: return 0
+                if vol == 0:
+                    return 0
                 diffs = []
                 for m in card.get("markets", []):
-                    prob = m.get("probability", 0.0)
+                    # 归一化 market probability
+                    prob = _normalize_prob(m.get("probability", 0.0))
+                    # 归一化 AI adjusted probability
                     adj_prob = m.get("ai_adjusted_probability") or m.get("adjustedProbability")
                     if adj_prob is None:
-                        curr_ai = prob
+                        curr_ai = prob  # 无 AI 数据时，diff = 0
                     else:
-                        curr_ai = float(adj_prob)
-                        if curr_ai > 1.0: curr_ai /= 100.0
+                        curr_ai = _normalize_prob(adj_prob)
                     diff = abs(prob - curr_ai)
                     diffs.append(diff)
-                    diffs.append(diff)
+                # 取最大的两个差值（如果有多个 market）
                 diffs.sort(reverse=True)
-                return vol * sum(diffs[:2])
+                top_diffs = diffs[:2] if len(diffs) >= 2 else diffs
+                return vol * sum(top_diffs)
             except:
                 return 0
 
+        # 生成两份独立排序列表
         list_volume = sorted(card_data_list, key=get_volume_score, reverse=True)
         list_alpha = sorted(card_data_list, key=get_weighted_alpha_score, reverse=True)
 
+        # 调试：打印前 5 名的排序情况
+        print(f"   📊 Volume Top5: {[c.get('id')[:8] + '...' for c in list_volume[:5]]}")
+        print(f"   📊 Alpha Top5:  {[c.get('id')[:8] + '...' for c in list_alpha[:5]]}")
+
+        # 精确交替插值：Index 0 -> volume[0], Index 1 -> alpha[0], Index 2 -> volume[1], ...
         final_list = []
         used_ids = set()
         ptr_vol, ptr_alpha = 0, 0
-        
+        turn_volume = True  # 从 volume 开始
+
         while len(final_list) < len(card_data_list):
-            while ptr_vol < len(list_volume):
-                card = list_volume[ptr_vol]
-                ptr_vol += 1
-                if card.get("id") not in used_ids:
-                    final_list.append(card)
-                    used_ids.add(card.get("id"))
-                    break
-            if len(final_list) >= len(card_data_list): break
-            while ptr_alpha < len(list_alpha):
-                card = list_alpha[ptr_alpha]
-                ptr_alpha += 1
-                if card.get("id") not in used_ids:
-                    final_list.append(card)
-                    used_ids.add(card.get("id"))
-                    break
+            if turn_volume:
+                # 从 list_volume 取下一个未使用的
+                while ptr_vol < len(list_volume):
+                    card = list_volume[ptr_vol]
+                    ptr_vol += 1
+                    if card.get("id") not in used_ids:
+                        final_list.append(card)
+                        used_ids.add(card.get("id"))
+                        break
+                else:
+                    # list_volume 已耗尽，切换到 alpha
+                    turn_volume = False
+                    continue
+            else:
+                # 从 list_alpha 取下一个未使用的（去重保护：自动顺延）
+                while ptr_alpha < len(list_alpha):
+                    card = list_alpha[ptr_alpha]
+                    ptr_alpha += 1
+                    if card.get("id") not in used_ids:
+                        final_list.append(card)
+                        used_ids.add(card.get("id"))
+                        break
+                else:
+                    # list_alpha 已耗尽，切换到 volume
+                    turn_volume = True
+                    continue
+            # 交替切换
+            turn_volume = not turn_volume
 
-        card_data_list = final_list
+        # -------- 8. 应用分页（在混合排序后） --------
+        offset = (page - 1) * pageSize
+        card_data_list = final_list[offset:offset + pageSize]
+        
         t_sort_end = time.perf_counter()
-        print(f"🔀 [Step 4] 混合加权排序完成: {(t_sort_end - t_sort_start) * 1000:.2f}ms")
+        print(f"🔀 [Step 4] 混合加权排序完成: {(t_sort_end - t_sort_start) * 1000:.2f}ms (候选池: {len(final_list)}, 返回: {len(card_data_list)})")
+        
+        # 调试：打印当前页的交替情况（前 10 条）
+        debug_slice = final_list[offset:offset + min(10, pageSize)]
+        for i, c in enumerate(debug_slice):
+            src = "VOL" if i % 2 == 0 else "ALP"
+            print(f"   [{offset + i}] {src}: {c.get('id')[:12]}... vol={c.get('volume', 0):.0f}")
 
-        # -------- 8. 诊断 Pydantic 序列化耗时 --------
+        # -------- 9. 诊断 Pydantic 序列化耗时 --------
         t_serialize_start = time.perf_counter()
         card_data_objects = [CardData(**item) for item in card_data_list]
         t_serialize_end = time.perf_counter()
