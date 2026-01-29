@@ -115,8 +115,8 @@ class MarketItem(BaseModel):
         # 优先使用 AI 调整后的概率，否则使用原始 probability
         ai_prob = values.get("ai_adjusted_probability")
         if ai_prob is not None:
-            # AI 概率是百分比（如 56.5），需要转为小数（0.565）
-            values["adjusted_probability"] = float(ai_prob) / 100.0
+            # 直接透传 (已在 _extract_markets_from_raw_data 归一化过)
+            values["adjusted_probability"] = float(ai_prob)
         else:
             values["adjusted_probability"] = prob
         

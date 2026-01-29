@@ -25,46 +25,73 @@ router = APIRouter()
 
 
 def _extract_markets_from_raw_data(raw_data: dict, ai_markets: dict = None) -> list:
-    """从 raw_data 中提取 markets 列表，并合并 AI 分析数据"""
+    """
+    [最终修正版] 从 raw_data 提取 markets
+    1. 包含 outcomePrices 的 JSON 解析兜底
+    2. 包含 AI 数据的归一化处理 (0-100 -> 0-1)
+    """
+    import json
     markets = raw_data.get("markets", [])
     ai_markets = ai_markets or {}
     result = []
     for market in markets:
         market_id = market.get("id", "")
-        # 提取所有关键字段，包括新增的字段
+        
+        # --- 1. 顽固的概率获取逻辑 ---
+        probability = 0.0
+        if "probability" in market:
+            probability = float(market["probability"] or 0)
+        
+        if probability == 0.0:
+            outcome_prices = market.get("outcomePrices")
+            if outcome_prices:
+                try:
+                    if isinstance(outcome_prices, str):
+                        outcome_prices = json.loads(outcome_prices)
+                    if isinstance(outcome_prices, list) and len(outcome_prices) > 0:
+                        probability = float(outcome_prices[0])
+                except:
+                    pass
+        
+        # --- 2. 基础数据 ---
         market_data = {
             "id": market_id,
             "question": market.get("question", ""),
             "outcomes": market.get("outcomes", []),
             "currentPrices": market.get("currentPrices", {}),
-            "volume": market.get("volume"),
-            "liquidity": market.get("liquidity"),  # Market 级别的 liquidity
+            "volume": float(market.get("volume") or 0),
+            "liquidity": float(market.get("liquidity") or 0),
             "active": market.get("active", True),
-            # 新增字段（前端 Mock 要求）
-            "groupItemTitle": market.get("groupItemTitle"),  # 修复：添加 groupItemTitle
-            "icon": market.get("icon"),  # Market 级别的 icon（如果有）
-            "outcomePrices": market.get("outcomePrices"),  # 修复：添加 outcomePrices（用于计算 probability）
+            "groupItemTitle": market.get("groupItemTitle"),
+            "icon": market.get("icon"),
+            "outcomePrices": market.get("outcomePrices"),
+            "probability": probability,
         }
         
-        # 如果有 AI 分析数据，注入相关字段
-        if market_id in ai_markets:
+        # --- 3. AI 数据注入 ---
+        ai_adj_prob = None
+        
+        if "adjustedProbability" in market:
+            ai_adj_prob = market["adjustedProbability"]
+        elif market_id in ai_markets:
             ai_data = ai_markets[market_id]
-            
-            # 1. AI 调整后的概率
             if "ai_calibrated_odds_pct" in ai_data:
-                market_data["ai_adjusted_probability"] = float(ai_data["ai_calibrated_odds_pct"])
-            
-            # 2. AI 置信度 (1-10)
+                ai_adj_prob = ai_data["ai_calibrated_odds_pct"]
             if "ai_confidence" in ai_data:
                 market_data["ai_confidence"] = float(ai_data["ai_confidence"])
-            
-            # 3. AI 分析详情 (支持多种 key 格式)
             market_data["ai_analysis_data"] = {
                 "structuralAnchor": ai_data.get("anchor") or ai_data.get("structural_anchor"),
                 "noise": ai_data.get("noise") or ai_data.get("the_noise"),
                 "barrier": ai_data.get("barrier") or ai_data.get("the_barrier"),
                 "blindspot": ai_data.get("blindspot") or ai_data.get("the_blindspot"),
             }
+        
+        # --- 4. 归一化 0-1 ---
+        if ai_adj_prob is not None:
+            val = float(ai_adj_prob)
+            if val > 1.0:
+                val = val / 100.0
+            market_data["ai_adjusted_probability"] = val
         
         result.append(market_data)
     return result
@@ -308,66 +335,60 @@ async def get_card_list(
         t_snap_end = time.perf_counter()
         print(f"🔄 [Step 3 Total] Snapshot 处理总耗时: {(t_snap_end - t_snap_start) * 1000:.2f}ms")
 
-        # -------- 7. 交替排序：单数位置按 volume，双数位置按 AI 差值 --------
+        # -------- 7. 混合加权排序：volume + AI alpha --------
         t_sort_start = time.perf_counter()
 
-        def calc_ai_diff(card_dict):
-            """计算 AI 预测与原始数据的双边差值绝对值之和"""
-            total_diff = 0.0
-            markets = card_dict.get("markets", [])
-            for m in markets:
-                try:
-                    # ✅ 修复：直接取我们刚注入的 probability
-                    prob = float(m.get("probability", 0) or 0)
-                    
-                    # ✅ 修复：使用正确的 key "ai_adjusted_probability"
-                    # 如果 AI 数据不存在，则回退到 prob，diff 为 0
-                    adj_prob = float(m.get("ai_adjusted_probability", prob) or prob)
-                    
-                    # 核心公式：|Market - AI|
-                    diff = abs(prob - adj_prob)
-                    
-                    # 累加双边差值 (diff * 2)
-                    total_diff += (diff * 2)
-                except (ValueError, TypeError):
-                    continue
-            return total_diff
+        def get_volume_score(card):
+            return float(card.get("volume") or 0)
 
-        # 1. 生成两份独立的排序列表
-        # List A: 按 Volume 降序 (代表热度)
-        volume_sorted = sorted(card_data_list, key=lambda x: float(x.get("volume") or 0), reverse=True)
-        
-        # List B: 按 AI Diff 降序 (代表机会/偏差)
-        diff_sorted = sorted(card_data_list, key=calc_ai_diff, reverse=True)
+        def get_weighted_alpha_score(card):
+            try:
+                vol = float(card.get("volume") or 0)
+                if vol == 0: return 0
+                diffs = []
+                for m in card.get("markets", []):
+                    prob = m.get("probability", 0.0)
+                    adj_prob = m.get("ai_adjusted_probability") or m.get("adjustedProbability")
+                    if adj_prob is None:
+                        curr_ai = prob
+                    else:
+                        curr_ai = float(adj_prob)
+                        if curr_ai > 1.0: curr_ai /= 100.0
+                    diff = abs(prob - curr_ai)
+                    diffs.append(diff)
+                    diffs.append(diff)
+                diffs.sort(reverse=True)
+                return vol * sum(diffs[:2])
+            except:
+                return 0
 
-        # 2. 拉链式合并 (Zipper Merge) - 安全版
-        interleaved_list = []
+        list_volume = sorted(card_data_list, key=get_volume_score, reverse=True)
+        list_alpha = sorted(card_data_list, key=get_weighted_alpha_score, reverse=True)
+
+        final_list = []
         used_ids = set()
+        ptr_vol, ptr_alpha = 0, 0
         
-        # 取最大长度，确保遍历完所有元素
-        max_len = max(len(volume_sorted), len(diff_sorted))
+        while len(final_list) < len(card_data_list):
+            while ptr_vol < len(list_volume):
+                card = list_volume[ptr_vol]
+                ptr_vol += 1
+                if card.get("id") not in used_ids:
+                    final_list.append(card)
+                    used_ids.add(card.get("id"))
+                    break
+            if len(final_list) >= len(card_data_list): break
+            while ptr_alpha < len(list_alpha):
+                card = list_alpha[ptr_alpha]
+                ptr_alpha += 1
+                if card.get("id") not in used_ids:
+                    final_list.append(card)
+                    used_ids.add(card.get("id"))
+                    break
 
-        for i in range(max_len):
-            # --- 奇数位置 (1, 3, 5...) -> 尝试添加 Volume 榜单的第 i 个 ---
-            if i < len(volume_sorted):
-                card = volume_sorted[i]
-                card_id = card.get("id")
-                if card_id not in used_ids:
-                    interleaved_list.append(card)
-                    used_ids.add(card_id)
-            
-            # --- 偶数位置 (2, 4, 6...) -> 尝试添加 Diff 榜单的第 i 个 ---
-            if i < len(diff_sorted):
-                card = diff_sorted[i]
-                card_id = card.get("id")
-                if card_id not in used_ids:
-                    interleaved_list.append(card)
-                    used_ids.add(card_id)
-
-        # 更新最终列表
-        card_data_list = interleaved_list
+        card_data_list = final_list
         t_sort_end = time.perf_counter()
-        print(f"🔀 [Step 4] 交替排序耗时: {(t_sort_end - t_sort_start) * 1000:.2f}ms")
+        print(f"🔀 [Step 4] 混合加权排序完成: {(t_sort_end - t_sort_start) * 1000:.2f}ms")
 
         # -------- 8. 诊断 Pydantic 序列化耗时 --------
         t_serialize_start = time.perf_counter()
