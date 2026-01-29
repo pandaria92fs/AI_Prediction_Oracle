@@ -20,8 +20,6 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 # ⚠️ 如果你的代理端口不是 7890，请在这里修改
-PROXY_URL = "http://127.0.0.1:7890" 
-
 class PolymarketCrawler:
     def __init__(self):
         # 配置代理和超时
@@ -347,7 +345,7 @@ async def run_batch_crawl():
     crawler = PolymarketCrawler()
     
     # --- 参数配置 ---
-    TOTAL_TARGET = 1000   # 目标抓取数量
+    TOTAL_TARGET = 200    # 目标抓取数量
     BATCH_SIZE = 50       # 每页数量
     CONCURRENCY = 5       # 🔥 并发数：同时发 5 个请求
     
