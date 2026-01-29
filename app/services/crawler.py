@@ -141,8 +141,29 @@ class PolymarketCrawler:
             print(f"❌ [Offset {offset}] 抓取失败: {str(e)}")
             return []
 
+    def _is_sports_event(self, event: Dict[str, Any]) -> bool:
+        """检查事件是否属于 sports 类别"""
+        tags = event.get("tags", [])
+        for tag in tags:
+            slug = tag.get("slug", "").lower()
+            if slug == "sports" or "sport" in slug:
+                return True
+        return False
+
     async def save_batch(self, events_data: List[Dict[str, Any]]):
         if not events_data: return
+
+        # 过滤掉 sports 类型的事件
+        filtered_events = [e for e in events_data if not self._is_sports_event(e)]
+        if not filtered_events:
+            print("   ⏩ 本批次全部为 sports 事件，跳过")
+            return
+        
+        skipped_count = len(events_data) - len(filtered_events)
+        if skipped_count > 0:
+            print(f"   🏀 过滤 sports 事件: {skipped_count} 条")
+        
+        events_data = filtered_events  # 替换为过滤后的数据
 
         t_start = time.time()
         event_card_ids: dict[str, int] = {}

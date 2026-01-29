@@ -168,6 +168,14 @@ async def get_card_list(
     try:
         # -------- 1. 构建基础查询（用于列表数据），并预加载关系以避免 N+1 --------
         t_query_build_start = time.perf_counter()
+        
+        # 子查询：找出所有包含 sports 标签的 card_id
+        sports_tag_subquery = (
+            select(card_tags.c.card_id)
+            .join(Tag, card_tags.c.tag_id == Tag.id)
+            .where(Tag.name.ilike("%sport%"))
+        ).scalar_subquery()
+        
         base_query = (
             select(EventCard)
             .options(
@@ -177,6 +185,7 @@ async def get_card_list(
                 # 如未来为 Market 建表并建立关系，可在此添加 selectinload(EventCard.markets)
             )
             .where(EventCard.is_active == True)
+            .where(EventCard.id.not_in(sports_tag_subquery))  # 过滤 sports
         )
 
         # 标签过滤（使用 Polymarket 原始 tag id）

@@ -12,6 +12,8 @@ from app.core.config import settings
 from app.db.session import get_db
 from app.models.event_card import EventCard
 from app.models.event_snapshot import EventSnapshot
+from app.models.tag import Tag
+from app.models.card_tag import card_tags
 from app.services.crawler import run_batch_crawl
 
 app = FastAPI(
@@ -78,11 +80,19 @@ async def get_cards(
     """
     offset = (page - 1) * pageSize
     
-    # 构建基础查询，预加载 predictions 关系
+    # 子查询：找出所有包含 sports 标签的 card_id
+    sports_tag_subquery = (
+        select(card_tags.c.card_id)
+        .join(Tag, card_tags.c.tag_id == Tag.id)
+        .where(Tag.name.ilike("%sport%"))
+    ).scalar_subquery()
+    
+    # 构建基础查询，预加载 predictions 关系，并过滤 sports
     query = (
         select(EventCard)
         .options(selectinload(EventCard.predictions))
         .where(EventCard.is_active == True)
+        .where(EventCard.id.not_in(sports_tag_subquery))  # 过滤 sports
     )
     
     # 如果传了 tag_id，从 EventSnapshot 的 raw_data JSONB 中过滤
