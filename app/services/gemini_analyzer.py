@@ -24,19 +24,15 @@ class GeminiAnalyzer:
             genai.configure(api_key=self.api_key)
 
     def _get_model(self):
-        """配置 Gemini 模型 (启用 Google Search Grounding)"""
+        """配置 Gemini 模型"""
         generation_config = {
             "temperature": 0.7,
             "response_mime_type": "application/json",  # 强制输出 JSON
         }
-        
-        # 启用 Google Search 工具
-        tools = [{"google_search": {}}]
 
         return genai.GenerativeModel(
-            model_name="gemini-3-pro-preview",  # 最新最强大模型
+            model_name="gemini-2.0-flash",  # 稳定可用的模型
             generation_config=generation_config,
-            tools=tools,
             safety_settings={
                 HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
                 HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
