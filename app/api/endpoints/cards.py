@@ -301,15 +301,58 @@ async def get_card_list(
         t_snap_end = time.perf_counter()
         print(f"🔄 [Step 3 Total] Snapshot 处理总耗时: {(t_snap_end - t_snap_start) * 1000:.2f}ms")
 
-        # -------- 7. 如果按 liquidity 排序，在 Python 层面排序 --------
-        if sortBy == "liquidity":
-            t_sort_start = time.perf_counter()
-            card_data_list.sort(
-                key=lambda x: x.get("liquidity") or 0,
-                reverse=(order == "desc"),
-            )
-            t_sort_end = time.perf_counter()
-            print(f"🔀 [Step 4] Python 层面排序耗时: {(t_sort_end - t_sort_start) * 1000:.2f}ms")
+        # -------- 7. 交替排序：单数位置按 volume，双数位置按 AI 差值 --------
+        t_sort_start = time.perf_counter()
+        
+        def calc_ai_diff(card_dict):
+            """计算 AI 预测与原始数据的差值绝对值之和"""
+            total_diff = 0.0
+            markets = card_dict.get("markets", [])
+            for m in markets:
+                prob = m.get("probability", 0) or 0
+                adj_prob = m.get("adjustedProbability", prob) or prob
+                # 计算单个市场的差值（原始和 AI 都有 Yes/No 两面）
+                diff = abs(prob - adj_prob)
+                total_diff += diff * 2  # Yes 和 No 的差值总和
+            return total_diff
+        
+        # 按 volume 降序排序的列表
+        volume_sorted = sorted(card_data_list, key=lambda x: x.get("volume") or 0, reverse=True)
+        
+        # 按 AI 差值降序排序的列表（差值越大越有"洞察"）
+        diff_sorted = sorted(card_data_list, key=calc_ai_diff, reverse=True)
+        
+        # 去重集合，防止重复添加
+        used_ids = set()
+        interleaved_list = []
+        
+        vol_idx, diff_idx = 0, 0
+        position = 1  # 从位置 1 开始
+        
+        while len(interleaved_list) < len(card_data_list):
+            if position % 2 == 1:  # 单数位置：volume
+                while vol_idx < len(volume_sorted):
+                    card = volume_sorted[vol_idx]
+                    vol_idx += 1
+                    card_id = card.get("id")
+                    if card_id not in used_ids:
+                        used_ids.add(card_id)
+                        interleaved_list.append(card)
+                        break
+            else:  # 双数位置：AI 差值
+                while diff_idx < len(diff_sorted):
+                    card = diff_sorted[diff_idx]
+                    diff_idx += 1
+                    card_id = card.get("id")
+                    if card_id not in used_ids:
+                        used_ids.add(card_id)
+                        interleaved_list.append(card)
+                        break
+            position += 1
+        
+        card_data_list = interleaved_list
+        t_sort_end = time.perf_counter()
+        print(f"🔀 [Step 4] 交替排序耗时: {(t_sort_end - t_sort_start) * 1000:.2f}ms")
 
         # -------- 8. 诊断 Pydantic 序列化耗时 --------
         t_serialize_start = time.perf_counter()
