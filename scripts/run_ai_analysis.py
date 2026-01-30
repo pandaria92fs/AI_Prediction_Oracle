@@ -18,6 +18,10 @@ from pathlib import Path
 # 添加路径以便导入 app 模块
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+# 加载 .env 文件
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
