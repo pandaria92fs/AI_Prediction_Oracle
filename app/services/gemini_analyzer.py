@@ -123,11 +123,6 @@ class GeminiAnalyzer:
         Title: {event_data.get("title", "")}
         Description: {event_data.get("description", "")}
         
-        **IMPORTANT MATHEMATICAL CONSTRAINT**: The following markets are MUTUALLY EXCLUSIVE and part of the same event. The sum of your ai_calibrated_odds for all listed Market IDs MUST EQUAL 1.0 (100%). If you assign a high probability to one date, you must reduce others proportionally.
-        
-        Markets:
-        {markets_text}
-
         Analysis Framework (The "Delta" Method):
         1. **Start with Market Odds**.
         2. **Search for Contradictions**: Is there breaking news, injury reports, or legal filings that the market ignores?
