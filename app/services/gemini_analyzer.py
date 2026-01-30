@@ -61,32 +61,44 @@ class GeminiAnalyzer:
             }
         )
 
+    def _get_market_probability(self, market: Dict[str, Any]) -> float:
+        """提取市场概率（统一逻辑）"""
+        if "calculated_odds" in market:
+            return float(market["calculated_odds"])
+        
+        outcome_prices = market.get("outcomePrices", [])
+        if outcome_prices:
+            try:
+                if isinstance(outcome_prices, str):
+                    outcome_prices = json.loads(outcome_prices)
+                return float(outcome_prices[0])
+            except:
+                pass
+        
+        return float(market.get("probability", 0.0))
+
     def _construct_prompt(self, event_data: Dict[str, Any]) -> str:
         """
-        构建 Prompt (V4 最终版：审计员模式 + 锚定效应 + 格式化增强)
+        构建 Prompt (V5：5% 准入门槛 + 审计员模式)
         """
         current_time = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
         
-        # 1. 市场数据循环处理 (关键修复：支持 calculated_odds 并同时显示 %)
-        markets_text = ""
+        # 1. 严格的 5% 市场准入过滤
+        MIN_PROBABILITY_THRESHOLD = 0.05  # 5% 门槛
         markets = event_data.get("markets", [])
+        
+        markets_text = ""
+        filtered_count = 0
         for m in markets:
+            probability = self._get_market_probability(m)
+            
+            # 严格遵守 5% 门槛，低于此值不进入 AI 分析池
+            if probability < MIN_PROBABILITY_THRESHOLD:
+                filtered_count += 1
+                continue
+            
             market_id = m.get("id", m.get("polymarket_id", ""))
             question = m.get("question", "")
-            
-            # 优先级逻辑：预处理赔率 > 原始 outcomePrices > 原始 probability
-            probability = 0.0
-            if "calculated_odds" in m:
-                probability = m["calculated_odds"]
-            else:
-                outcome_prices = m.get("outcomePrices", [])
-                if outcome_prices:
-                    try:
-                        if isinstance(outcome_prices, str):
-                            outcome_prices = json.loads(outcome_prices)
-                        probability = float(outcome_prices[0])
-                    except:
-                        probability = m.get("probability", 0.0)
             
             # 格式化：同时显示 0.65 和 65.0%
             markets_text += f"""
@@ -94,6 +106,9 @@ class GeminiAnalyzer:
             - Question: {question}
             - Current Probability: {probability:.2f} ({probability*100:.1f}%)
             """
+        
+        if filtered_count > 0:
+            logger.info(f"📊 过滤掉 {filtered_count} 个低概率市场 (< 5%)")
 
         # 2. V4 核心 Prompt：审计员 + 锚定效应 + 严格约束
         prompt = f"""
@@ -288,50 +303,88 @@ class GeminiAnalyzer:
         logger.error(f"❌ Gemini Analysis Failed after {max_retries} attempts: {last_error}")
         return None
 
-    def transform_to_raw_analysis(self, gemini_result: Dict[str, Any]) -> Dict[str, Any]:
+    def transform_to_raw_analysis(
+        self, 
+        gemini_result: Dict[str, Any], 
+        original_markets: list = None
+    ) -> Dict[str, Any]:
         """
         将 Gemini 返回结果转换为 raw_analysis 存储格式（带归一化）
         
         Args:
             gemini_result: Gemini API 返回的原始结果
+            original_markets: 原始市场列表（包含未进入 AI 分析池的市场）
             
         Returns:
-            适合存入 AIPrediction.raw_analysis 的格式
+            适合存入 AIPrediction.raw_analysis 的格式（确保所有 Market ID 都有返回）
         """
         if not gemini_result:
             return {}
         
-        markets = gemini_result.get("markets", {})
-        if not markets:
-            return {}
+        ai_markets = gemini_result.get("markets", {})
+        original_markets = original_markets or []
         
-        # 1. 计算 AI 给出的概率总和
-        total_ai_prob = sum(m.get("ai_calibrated_odds", 0) for m in markets.values())
+        # 1. 收集所有原始市场的概率（用于未分析市场的极小值分配）
+        all_market_probs = {}
+        for m in original_markets:
+            market_id = m.get("id", m.get("polymarket_id", ""))
+            prob = self._get_market_probability(m)
+            all_market_probs[market_id] = prob
         
-        # 日志：记录归一化前的总和
+        # 2. 计算 AI 返回的概率总和
+        total_ai_prob = sum(m.get("ai_calibrated_odds", 0) for m in ai_markets.values())
+        
+        # 3. 计算未分析市场的原始概率总和（用于分配剩余概率）
+        analyzed_ids = set(ai_markets.keys())
+        unanalyzed_prob_sum = sum(
+            prob for mid, prob in all_market_probs.items() 
+            if mid not in analyzed_ids
+        )
+        
+        # 日志
         if total_ai_prob > 0 and abs(total_ai_prob - 1.0) > 0.01:
-            logger.warning(f"⚠️ AI 概率总和为 {total_ai_prob:.3f}，将强制归一化到 1.0")
+            logger.warning(f"⚠️ AI 概率总和为 {total_ai_prob:.3f}，将强制归一化")
+        if unanalyzed_prob_sum > 0:
+            logger.info(f"📊 未分析市场原始概率总和: {unanalyzed_prob_sum:.3f}")
+        
+        # 4. 归一化基准 = AI 分析的 + 未分析市场的原始概率
+        normalization_base = total_ai_prob + unanalyzed_prob_sum
+        if normalization_base <= 0:
+            normalization_base = 1.0  # 防止除零
         
         raw_analysis = {}
-        for market_id, market_data in markets.items():
+        
+        # 5. 处理 AI 分析过的市场
+        for market_id, market_data in ai_markets.items():
             analysis = market_data.get("analysis", {})
-            
-            # 2. 强制归一化：ai_prob / total_sum
-            # 即使 AI 给出的总和是 0.205 或 1.5，归一化后都会回到 1.0
             calibrated_prob = market_data.get("ai_calibrated_odds", 0)
-            normalized_pct = (calibrated_prob / total_ai_prob) * 100 if total_ai_prob > 0 else 0
+            normalized_pct = (calibrated_prob / normalization_base) * 100
             
             raw_analysis[market_id] = {
-                # AI 校准概率（归一化后的百分比）
                 "ai_calibrated_odds_pct": round(normalized_pct, 2),
-                # AI 置信度 (0-10)
                 "ai_confidence": market_data.get("confidence_score", 0),
-                # AI 分析详情
                 "structural_anchor": analysis.get("structural_anchor"),
                 "noise": analysis.get("noise"),
                 "barrier": analysis.get("barrier"),
                 "blindspot": analysis.get("blindspot"),
+                "_analyzed": True,  # 标记：已被 AI 分析
             }
+        
+        # 6. 处理未分析的市场（低于 5% 门槛）
+        for market_id, original_prob in all_market_probs.items():
+            if market_id not in analyzed_ids:
+                # 使用原始概率按比例分配（保持极小值）
+                normalized_pct = (original_prob / normalization_base) * 100
+                
+                raw_analysis[market_id] = {
+                    "ai_calibrated_odds_pct": round(normalized_pct, 2),
+                    "ai_confidence": 0,  # 未分析，置信度为 0
+                    "structural_anchor": None,
+                    "noise": None,
+                    "barrier": None,
+                    "blindspot": None,
+                    "_analyzed": False,  # 标记：未被 AI 分析（低于 5% 门槛）
+                }
         
         return raw_analysis
 
