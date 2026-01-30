@@ -80,9 +80,13 @@ def _extract_markets_from_raw_data(raw_data: dict, ai_markets: dict = None) -> l
                 ai_adj_prob = ai_data["ai_calibrated_odds"]
             elif "ai_calibrated_odds_pct" in ai_data:
                 # 兼容旧数据：百分比格式转为小数
-                ai_adj_prob = ai_data["ai_calibrated_odds_pct"] / 100.0
-            if "ai_confidence" in ai_data:
-                market_data["ai_confidence"] = float(ai_data["ai_confidence"])
+                pct_val = ai_data["ai_calibrated_odds_pct"]
+                if pct_val is not None:
+                    ai_adj_prob = pct_val / 100.0
+            # 安全处理 ai_confidence (可能为 None)
+            ai_conf = ai_data.get("ai_confidence")
+            if ai_conf is not None:
+                market_data["ai_confidence"] = float(ai_conf)
             market_data["ai_analysis_data"] = {
                 "structuralAnchor": ai_data.get("anchor") or ai_data.get("structural_anchor"),
                 "noise": ai_data.get("noise") or ai_data.get("the_noise"),
