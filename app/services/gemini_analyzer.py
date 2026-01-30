@@ -107,6 +107,9 @@ class GeminiAnalyzer:
         Input Event:
         Title: {event_data.get("title", "")}
         Description: {event_data.get("description", "")}
+        
+        **IMPORTANT MATHEMATICAL CONSTRAINT**: The following markets are MUTUALLY EXCLUSIVE and part of the same event. The sum of your ai_calibrated_odds for all listed Market IDs MUST EQUAL 1.0 (100%). If you assign a high probability to one date, you must reduce others proportionally.
+        
         Markets:
         {markets_text}
 
@@ -287,7 +290,7 @@ class GeminiAnalyzer:
 
     def transform_to_raw_analysis(self, gemini_result: Dict[str, Any]) -> Dict[str, Any]:
         """
-        将 Gemini 返回结果转换为 raw_analysis 存储格式
+        将 Gemini 返回结果转换为 raw_analysis 存储格式（带归一化）
         
         Args:
             gemini_result: Gemini API 返回的原始结果
@@ -298,16 +301,29 @@ class GeminiAnalyzer:
         if not gemini_result:
             return {}
         
-        raw_analysis = {}
         markets = gemini_result.get("markets", {})
+        if not markets:
+            return {}
         
+        # 1. 计算 AI 给出的概率总和
+        total_ai_prob = sum(m.get("ai_calibrated_odds", 0) for m in markets.values())
+        
+        # 日志：记录归一化前的总和
+        if total_ai_prob > 0 and abs(total_ai_prob - 1.0) > 0.01:
+            logger.warning(f"⚠️ AI 概率总和为 {total_ai_prob:.3f}，将强制归一化到 1.0")
+        
+        raw_analysis = {}
         for market_id, market_data in markets.items():
             analysis = market_data.get("analysis", {})
+            
+            # 2. 强制归一化：ai_prob / total_sum
+            # 即使 AI 给出的总和是 0.205 或 1.5，归一化后都会回到 1.0
+            calibrated_prob = market_data.get("ai_calibrated_odds", 0)
+            normalized_pct = (calibrated_prob / total_ai_prob) * 100 if total_ai_prob > 0 else 0
+            
             raw_analysis[market_id] = {
-                "question": None,  # 需要从原始数据补充
-                "original_odds": None,  # 需要从原始数据补充
-                # AI 校准概率 (0-1 转为百分比 0-100)
-                "ai_calibrated_odds_pct": market_data.get("ai_calibrated_odds", 0) * 100,
+                # AI 校准概率（归一化后的百分比）
+                "ai_calibrated_odds_pct": round(normalized_pct, 2),
                 # AI 置信度 (0-10)
                 "ai_confidence": market_data.get("confidence_score", 0),
                 # AI 分析详情
