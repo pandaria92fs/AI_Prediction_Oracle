@@ -193,10 +193,13 @@ class CardData(BaseModel):
             if m.active is True and getattr(m, "archived", False) is False
         ]
 
-        # 3. 核心排序：概率优先 (Probability DESC)
-        # 虽然外部卡片可能是按 Volume 排进来的，但内部第一行展示概率最高的结果
+        # 3. 核心排序：AI Odds 优先 (adjusted_probability DESC)
+        # 如果有 AI 预测，按 AI odds 排序；否则按原始 probability 排序
         valid_markets.sort(
-            key=lambda x: (x.probability, x.volume or 0.0),  # 概率为主，Volume 为辅
+            key=lambda x: (
+                x.adjusted_probability if x.adjusted_probability is not None else x.probability,
+                x.volume or 0.0
+            ),
             reverse=True,
         )
 
