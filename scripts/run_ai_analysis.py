@@ -99,9 +99,9 @@ async def process_batch(limit: int = 5):
                 conf = mdata.get("confidence_score", 0)
                 if conf > primary_conf:
                     primary_conf = conf
-                    # 存储百分比形式
-                    odds = mdata.get("ai_calibrated_odds", 0) * 100
-                    primary_prediction = f"{odds:.1f}"
+                    # 存储为 0-1 小数格式 (标准化)
+                    odds = float(mdata.get("ai_calibrated_odds", 0))
+                    primary_prediction = f"{odds:.4f}"
 
             # 4. 转换为存储格式
             raw_analysis = ai_analyzer.transform_to_raw_analysis(ai_result)

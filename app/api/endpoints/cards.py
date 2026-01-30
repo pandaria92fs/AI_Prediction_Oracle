@@ -75,8 +75,12 @@ def _extract_markets_from_raw_data(raw_data: dict, ai_markets: dict = None) -> l
             ai_adj_prob = market["adjustedProbability"]
         elif market_id in ai_markets:
             ai_data = ai_markets[market_id]
-            if "ai_calibrated_odds_pct" in ai_data:
-                ai_adj_prob = ai_data["ai_calibrated_odds_pct"]
+            # 标准化字段名：优先使用 ai_calibrated_odds (0-1)，兼容旧字段名
+            if "ai_calibrated_odds" in ai_data:
+                ai_adj_prob = ai_data["ai_calibrated_odds"]
+            elif "ai_calibrated_odds_pct" in ai_data:
+                # 兼容旧数据：百分比格式转为小数
+                ai_adj_prob = ai_data["ai_calibrated_odds_pct"] / 100.0
             if "ai_confidence" in ai_data:
                 market_data["ai_confidence"] = float(ai_data["ai_confidence"])
             market_data["ai_analysis_data"] = {
@@ -86,12 +90,9 @@ def _extract_markets_from_raw_data(raw_data: dict, ai_markets: dict = None) -> l
                 "blindspot": ai_data.get("blindspot") or ai_data.get("the_blindspot"),
             }
         
-        # --- 4. 归一化 0-1 ---
+        # --- 4. 直接透传 (已标准化为 0-1 scale) ---
         if ai_adj_prob is not None:
-            val = float(ai_adj_prob)
-            if val > 1.0:
-                val = val / 100.0
-            market_data["ai_adjusted_probability"] = val
+            market_data["ai_adjusted_probability"] = float(ai_adj_prob)
         
         result.append(market_data)
     return result

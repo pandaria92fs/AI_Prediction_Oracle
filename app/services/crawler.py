@@ -295,14 +295,16 @@ class PolymarketCrawler:
                     summary = ai_result.get("executive_summary", "")
                     markets_data = ai_result.get("markets", {})
                     
+                    # 找到最高 confidence 的 market 作为主要预测
                     primary_prediction = "0"
                     primary_conf = 0.0
                     for _, mdata in markets_data.items():
                         conf = mdata.get("confidence_score", 0)
                         if conf > primary_conf:
                             primary_conf = conf
-                            odds = mdata.get("ai_calibrated_odds", 0) * 100
-                            primary_prediction = f"{odds:.1f}"
+                            # 存储为 0-1 小数格式 (标准化)
+                            odds = float(mdata.get("ai_calibrated_odds", 0))
+                            primary_prediction = f"{odds:.4f}"
 
                     raw_analysis = ai_analyzer.transform_to_raw_analysis(ai_result)
                     

@@ -327,6 +327,8 @@ class GeminiAnalyzer:
         ai_markets = gemini_result.get("markets", {})
         original_markets = original_markets or []
         
+        # === 全链路标准化：所有概率存储为 0.0-1.0 小数格式 ===
+        
         # 1. 收集所有原始市场的概率
         all_market_probs = {}
         for m in original_markets:
@@ -344,15 +346,13 @@ class GeminiAnalyzer:
             prob for mid, prob in all_market_probs.items() 
             if mid not in analyzed_ids
         )
-        normalization_base = total_ai_prob + unanalyzed_prob_sum
-        if normalization_base <= 0:
-            normalization_base = 1.0  # 防止除零
+        normalization_base = max(total_ai_prob + unanalyzed_prob_sum, 0.001)  # 防止除零
         
         # 日志
         if is_single_market:
-            logger.info("📊 单一市场事件，直接使用 AI 原始概率（不做归一化）")
+            logger.info("📊 单一市场事件，直接使用 AI 原始概率 (0-1 scale)")
         else:
-            logger.info(f"📊 多市场事件 ({len(all_market_probs)} 个)，归一化基准: {normalization_base:.3f}")
+            logger.info(f"📊 多市场事件 ({len(all_market_probs)} 个)，归一化基准: {normalization_base:.4f}")
         
         raw_analysis = {}
         
@@ -362,15 +362,18 @@ class GeminiAnalyzer:
             # Safety Gate: 确保 calibrated_prob 是 float
             calibrated_prob = float(market_data.get("ai_calibrated_odds", 0))
             
-            # 单一市场：直接转为百分比 (0.42 → 42.0)
-            # 多市场：归一化后转为百分比，确保总和 = 100%
+            # 单一市场：直接使用 AI 原始值 (0.42 stays 0.42)
+            # 多市场：归一化确保总和 = 1.0
             if is_single_market:
-                normalized_pct = calibrated_prob * 100
+                final_val = calibrated_prob
             else:
-                normalized_pct = (calibrated_prob / normalization_base) * 100
+                final_val = calibrated_prob / normalization_base
+            
+            # 确保值在 0-1 范围内
+            final_val = max(0.0, min(1.0, final_val))
             
             raw_analysis[market_id] = {
-                "ai_calibrated_odds_pct": round(normalized_pct, 2),
+                "ai_calibrated_odds": round(final_val, 4),  # 0-1 scale, 4 decimal places
                 "ai_confidence": market_data.get("confidence_score", 0),
                 "structural_anchor": analysis.get("structural_anchor"),
                 "noise": analysis.get("noise"),
@@ -386,12 +389,15 @@ class GeminiAnalyzer:
                 original_prob = float(original_prob)
                 
                 if is_single_market:
-                    normalized_pct = original_prob * 100
+                    final_val = original_prob
                 else:
-                    normalized_pct = (original_prob / normalization_base) * 100
+                    final_val = original_prob / normalization_base
+                
+                # 确保值在 0-1 范围内
+                final_val = max(0.0, min(1.0, final_val))
                 
                 raw_analysis[market_id] = {
-                    "ai_calibrated_odds_pct": round(normalized_pct, 2),
+                    "ai_calibrated_odds": round(final_val, 4),  # 0-1 scale
                     "ai_confidence": 0,
                     "structural_anchor": None,
                     "noise": None,
