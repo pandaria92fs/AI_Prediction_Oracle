@@ -168,6 +168,47 @@ class GeminiAnalyzer:
         """
         return prompt
 
+    def analyze_with_gemini(self, event_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        同步版本：分析单个事件（带输入输出审计日志）
+        """
+        if not self.api_key:
+            logger.error("❌ GEMINI_API_KEY not configured")
+            return None
+
+        model = self._get_model()
+        prompt = self._construct_prompt(event_data)
+
+        # --- [检索点 1: 输入审计] ---
+        logger.debug(f"===== AI INPUT PROMPT (Event: {event_data.get('id')}) =====")
+        logger.debug(prompt)
+
+        try:
+            response = model.generate_content(prompt)
+            raw_response = response.text
+
+            # --- [检索点 2: 输出审计] ---
+            logger.debug(f"===== AI RAW RESPONSE =====")
+            logger.debug(raw_response)
+
+            # 尝试解析 JSON
+            try:
+                parsed_data = json.loads(raw_response)
+                return parsed_data
+            except json.JSONDecodeError:
+                # 尝试修复并重新解析
+                fixed_text = _fix_json_string(raw_response)
+                try:
+                    parsed_data = json.loads(fixed_text)
+                    logger.warning("⚠️ JSON was malformed, auto-fixed successfully")
+                    return parsed_data
+                except json.JSONDecodeError as e:
+                    logger.error(f"解析 AI 回复失败: {e}, 原始文本: {raw_response}")
+                    return None
+        except Exception as e:
+            logger.error(f"Gemini API 调用失败: {e}")
+            return None
+
     async def analyze_event(self, event_data: Dict[str, Any], max_retries: int = 3, retry_delay: float = 2.0) -> Optional[Dict[str, Any]]:
         """
         主入口：分析单个事件（带重试机制）
