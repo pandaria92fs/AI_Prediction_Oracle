@@ -295,18 +295,20 @@ class PolymarketCrawler:
                     summary = ai_result.get("executive_summary", "")
                     markets_data = ai_result.get("markets", {})
                     
-                    # 找到最高 confidence 的 market 作为主要预测
+                    # 找到最高 ai_calibrated_odds 的 market 作为主要预测
+                    # (Gemini 不返回 confidence_score，所以用 odds 代替)
                     primary_prediction = "0"
-                    primary_conf = 0.0
-                    for _, mdata in markets_data.items():
-                        conf = mdata.get("confidence_score", 0)
-                        if conf > primary_conf:
-                            primary_conf = conf
-                            # 存储为 0-1 小数格式 (标准化)
-                            odds = float(mdata.get("ai_calibrated_odds", 0))
+                    highest_odds = -1.0
+                    for market_id, mdata in markets_data.items():
+                        odds = float(mdata.get("ai_calibrated_odds", 0) or 0)
+                        if odds > highest_odds:
+                            highest_odds = odds
                             primary_prediction = f"{odds:.4f}"
+                    
+                    # confidence_score 暂时用 highest_odds * 10 作为占位
+                    primary_conf = highest_odds
 
-                    # 回填原始数据 (需要传入 original_markets 用于归一化)
+                    # 回填原始数据
                     all_original_markets = event.get("markets", [])
                     raw_analysis = ai_analyzer.transform_to_raw_analysis(ai_result, all_original_markets)
                     for market in all_original_markets:
