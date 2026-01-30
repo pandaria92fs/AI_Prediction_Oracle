@@ -90,9 +90,11 @@ def _extract_markets_from_raw_data(raw_data: dict, ai_markets: dict = None) -> l
                 "blindspot": ai_data.get("blindspot") or ai_data.get("the_blindspot"),
             }
         
-        # --- 4. 直接透传 (已标准化为 0-1 scale) ---
+        # --- 4. 透传 AI 预测值 (0-1 scale)，None 显式传递为 null ---
         if ai_adj_prob is not None:
             market_data["ai_adjusted_probability"] = float(ai_adj_prob)
+        else:
+            market_data["ai_adjusted_probability"] = None  # 显式 null，便于前端判断
         
         result.append(market_data)
     return result

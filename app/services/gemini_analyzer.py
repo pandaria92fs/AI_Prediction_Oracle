@@ -312,72 +312,44 @@ class GeminiAnalyzer:
         original_markets: list = None
     ) -> Dict[str, Any]:
         """
-        将 Gemini 返回结果转换为 raw_analysis 存储格式（带归一化）
+        将 Gemini 返回结果转换为 raw_analysis 存储格式（简化版，无归一化）
         
         Args:
             gemini_result: Gemini API 返回的原始结果
-            original_markets: 原始市场列表（必须提供，用于归一化计算）
+            original_markets: 原始市场列表（用于识别未分析的市场）
             
         Returns:
-            适合存入 AIPrediction.raw_analysis 的格式（确保所有 Market ID 都有返回）
+            适合存入 AIPrediction.raw_analysis 的格式
+            - AI 分析过的市场：存储 Gemini 返回的精确值
+            - 未分析的市场：ai_calibrated_odds 设为 None
         """
-        # 防御性检查：original_markets 必须提供
-        if original_markets is None:
-            logger.error("CRITICAL: original_markets must be provided for normalization!")
-            return {}
-        
         if not gemini_result:
             return {}
         
         ai_markets = gemini_result.get("markets", {})
+        original_markets = original_markets or []
         
-        # === 全链路标准化：所有概率存储为 0.0-1.0 小数格式 ===
-        
-        # 1. 收集所有原始市场的概率
-        all_market_probs = {}
+        # 收集所有市场 ID（用于标记未分析的市场）
+        all_market_ids = set()
         for m in original_markets:
             market_id = m.get("id", m.get("polymarket_id", ""))
-            prob = self._get_market_probability(m)
-            all_market_probs[market_id] = prob
-        
-        # 2. 检测是否为单一市场事件
-        is_single_market = len(all_market_probs) == 1
-        
-        # 3. 计算归一化基准（仅用于多市场场景）
-        analyzed_ids = set(ai_markets.keys())
-        total_ai_prob = sum(float(m.get("ai_calibrated_odds", 0)) for m in ai_markets.values())
-        unanalyzed_prob_sum = sum(
-            prob for mid, prob in all_market_probs.items() 
-            if mid not in analyzed_ids
-        )
-        normalization_base = max(total_ai_prob + unanalyzed_prob_sum, 0.001)  # 防止除零
-        
-        # 日志
-        if is_single_market:
-            logger.info("📊 单一市场事件，直接使用 AI 原始概率 (0-1 scale)")
-        else:
-            logger.info(f"📊 多市场事件 ({len(all_market_probs)} 个)，归一化基准: {normalization_base:.4f}")
+            if market_id:
+                all_market_ids.add(str(market_id))
         
         raw_analysis = {}
         
-        # 4. 处理 AI 分析过的市场
+        # 1. AI 分析过的市场：存储 Gemini 返回的精确值（0-1 scale）
         for market_id, market_data in ai_markets.items():
             analysis = market_data.get("analysis", {})
-            # Safety Gate: 确保 calibrated_prob 是 float
-            calibrated_prob = float(market_data.get("ai_calibrated_odds", 0))
+            calibrated_prob = market_data.get("ai_calibrated_odds")
             
-            # 单一市场：直接使用 AI 原始值 (0.42 stays 0.42)
-            # 多市场：归一化确保总和 = 1.0
-            if is_single_market:
-                final_val = calibrated_prob
-            else:
-                final_val = calibrated_prob / normalization_base
-            
-            # 确保值在 0-1 范围内
-            final_val = max(0.0, min(1.0, final_val))
+            # 确保 0-1 范围（如果存在值）
+            if calibrated_prob is not None:
+                calibrated_prob = max(0.0, min(1.0, float(calibrated_prob)))
+                calibrated_prob = round(calibrated_prob, 4)
             
             raw_analysis[market_id] = {
-                "ai_calibrated_odds": round(final_val, 4),  # 0-1 scale, 4 decimal places
+                "ai_calibrated_odds": calibrated_prob,  # 精确值，无归一化
                 "ai_confidence": market_data.get("confidence_score", 0),
                 "structural_anchor": analysis.get("structural_anchor"),
                 "noise": analysis.get("noise"),
@@ -386,29 +358,21 @@ class GeminiAnalyzer:
                 "_analyzed": True,
             }
         
-        # 5. 处理未分析的市场（低于 5% 门槛）
-        for market_id, original_prob in all_market_probs.items():
+        # 2. 未分析的市场：ai_calibrated_odds 设为 None（不做回填）
+        analyzed_ids = set(ai_markets.keys())
+        for market_id in all_market_ids:
             if market_id not in analyzed_ids:
-                # Safety Gate: 确保 original_prob 是 float
-                original_prob = float(original_prob)
-                
-                if is_single_market:
-                    final_val = original_prob
-                else:
-                    final_val = original_prob / normalization_base
-                
-                # 确保值在 0-1 范围内
-                final_val = max(0.0, min(1.0, final_val))
-                
                 raw_analysis[market_id] = {
-                    "ai_calibrated_odds": round(final_val, 4),  # 0-1 scale
-                    "ai_confidence": 0,
+                    "ai_calibrated_odds": None,  # 明确设为 None，不回填
+                    "ai_confidence": None,
                     "structural_anchor": None,
                     "noise": None,
                     "barrier": None,
                     "blindspot": None,
                     "_analyzed": False,
                 }
+        
+        logger.info(f"📊 转换完成: {len(analyzed_ids)} 个市场有 AI 分析, {len(all_market_ids) - len(analyzed_ids)} 个未分析")
         
         return raw_analysis
 
