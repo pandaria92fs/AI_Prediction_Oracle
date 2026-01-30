@@ -303,20 +303,64 @@ class GeminiAnalyzer:
         logger.error(f"❌ Gemini Analysis Failed after {max_retries} attempts: {last_error}")
         return None
 
+    def _should_normalize(self, event_title: str, market_count: int) -> bool:
+        """
+        判断是否需要对概率进行归一化（总和 = 100%）
+        
+        跳过归一化的场景：
+        - 累积型事件（标题含 by, hit, reach, above, below, over, under 等）
+        - 单一市场（market_count == 1）
+        
+        执行归一化的场景：
+        - 竞争性多选一（标题含 nominee, winner, which, who will 等）
+        """
+        title_lower = (event_title or "").lower()
+        
+        # 1. 单一市场：跳过归一化
+        if market_count <= 1:
+            logger.info("📊 单一市场，跳过归一化")
+            return False
+        
+        # 2. 累积型关键词：跳过归一化（保留 AI 原始偏差信号）
+        cumulative_keywords = [
+            " by ", "hit", "reach", "above", "below", "over", "under",
+            "at least", "more than", "less than", "exceed", "surpass"
+        ]
+        for kw in cumulative_keywords:
+            if kw in title_lower:
+                logger.info(f"📊 累积型事件 (含 '{kw}')，跳过归一化")
+                return False
+        
+        # 3. 竞争性关键词：执行归一化
+        competitive_keywords = [
+            "nominee", "winner", "which", "who will win", "who will be",
+            "next president", "next prime minister", "champion"
+        ]
+        for kw in competitive_keywords:
+            if kw in title_lower:
+                logger.info(f"📊 竞争性事件 (含 '{kw}')，执行归一化")
+                return True
+        
+        # 4. 默认：多市场执行归一化
+        logger.info(f"📊 多市场 ({market_count} 个)，默认执行归一化")
+        return True
+
     def transform_to_raw_analysis(
         self, 
         gemini_result: Dict[str, Any], 
-        original_markets: list = None
+        original_markets: list = None,
+        event_title: str = None
     ) -> Dict[str, Any]:
         """
-        将 Gemini 返回结果转换为 raw_analysis 存储格式（带归一化）
+        将 Gemini 返回结果转换为 raw_analysis 存储格式（智能归一化）
         
         Args:
             gemini_result: Gemini API 返回的原始结果
             original_markets: 原始市场列表（包含未进入 AI 分析池的市场）
+            event_title: 事件标题（用于判断是否需要归一化）
             
         Returns:
-            适合存入 AIPrediction.raw_analysis 的格式（确保所有 Market ID 都有返回）
+            适合存入 AIPrediction.raw_analysis 的格式
         """
         if not gemini_result:
             return {}
@@ -324,7 +368,7 @@ class GeminiAnalyzer:
         ai_markets = gemini_result.get("markets", {})
         original_markets = original_markets or []
         
-        # 1. 收集所有原始市场的概率（用于未分析市场的极小值分配）
+        # 1. 收集所有原始市场的概率
         all_market_probs = {}
         for m in original_markets:
             market_id = m.get("id", m.get("polymarket_id", ""))
@@ -334,56 +378,68 @@ class GeminiAnalyzer:
         # 2. 计算 AI 返回的概率总和
         total_ai_prob = sum(m.get("ai_calibrated_odds", 0) for m in ai_markets.values())
         
-        # 3. 计算未分析市场的原始概率总和（用于分配剩余概率）
+        # 3. 判断是否需要归一化
+        should_normalize = self._should_normalize(event_title, len(original_markets))
+        
+        # 4. 计算未分析市场的原始概率总和
         analyzed_ids = set(ai_markets.keys())
         unanalyzed_prob_sum = sum(
             prob for mid, prob in all_market_probs.items() 
             if mid not in analyzed_ids
         )
         
-        # 日志
-        if total_ai_prob > 0 and abs(total_ai_prob - 1.0) > 0.01:
-            logger.warning(f"⚠️ AI 概率总和为 {total_ai_prob:.3f}，将强制归一化")
-        if unanalyzed_prob_sum > 0:
-            logger.info(f"📊 未分析市场原始概率总和: {unanalyzed_prob_sum:.3f}")
-        
-        # 4. 归一化基准 = AI 分析的 + 未分析市场的原始概率
-        normalization_base = total_ai_prob + unanalyzed_prob_sum
-        if normalization_base <= 0:
-            normalization_base = 1.0  # 防止除零
+        # 5. 确定归一化基准
+        if should_normalize:
+            normalization_base = total_ai_prob + unanalyzed_prob_sum
+            if normalization_base <= 0:
+                normalization_base = 1.0
+            if abs(normalization_base - 1.0) > 0.01:
+                logger.warning(f"⚠️ AI 概率总和为 {normalization_base:.3f}，将强制归一化到 1.0")
+        else:
+            # 不归一化：直接使用 AI 原始值（乘以 100 转为百分比）
+            normalization_base = 1.0
         
         raw_analysis = {}
         
-        # 5. 处理 AI 分析过的市场
+        # 6. 处理 AI 分析过的市场
         for market_id, market_data in ai_markets.items():
             analysis = market_data.get("analysis", {})
             calibrated_prob = market_data.get("ai_calibrated_odds", 0)
-            normalized_pct = (calibrated_prob / normalization_base) * 100
+            
+            if should_normalize:
+                final_pct = (calibrated_prob / normalization_base) * 100
+            else:
+                # 不归一化：直接转为百分比
+                final_pct = calibrated_prob * 100
             
             raw_analysis[market_id] = {
-                "ai_calibrated_odds_pct": round(normalized_pct, 2),
+                "ai_calibrated_odds_pct": round(final_pct, 2),
                 "ai_confidence": market_data.get("confidence_score", 0),
                 "structural_anchor": analysis.get("structural_anchor"),
                 "noise": analysis.get("noise"),
                 "barrier": analysis.get("barrier"),
                 "blindspot": analysis.get("blindspot"),
-                "_analyzed": True,  # 标记：已被 AI 分析
+                "_analyzed": True,
+                "_normalized": should_normalize,
             }
         
-        # 6. 处理未分析的市场（低于 5% 门槛）
+        # 7. 处理未分析的市场（低于 5% 门槛）
         for market_id, original_prob in all_market_probs.items():
             if market_id not in analyzed_ids:
-                # 使用原始概率按比例分配（保持极小值）
-                normalized_pct = (original_prob / normalization_base) * 100
+                if should_normalize:
+                    final_pct = (original_prob / normalization_base) * 100
+                else:
+                    final_pct = original_prob * 100
                 
                 raw_analysis[market_id] = {
-                    "ai_calibrated_odds_pct": round(normalized_pct, 2),
-                    "ai_confidence": 0,  # 未分析，置信度为 0
+                    "ai_calibrated_odds_pct": round(final_pct, 2),
+                    "ai_confidence": 0,
                     "structural_anchor": None,
                     "noise": None,
                     "barrier": None,
                     "blindspot": None,
-                    "_analyzed": False,  # 标记：未被 AI 分析（低于 5% 门槛）
+                    "_analyzed": False,
+                    "_normalized": should_normalize,
                 }
         
         return raw_analysis
