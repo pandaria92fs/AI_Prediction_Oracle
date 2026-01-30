@@ -138,13 +138,15 @@ def _build_card_data(card: EventCard, snapshot: Optional[EventSnapshot] = None, 
     if predictions and len(predictions) > 0:
         # predictions 应该按 created_at 降序排序，取第一个
         latest = predictions[0]
-        ai_logic_summary = latest.summary
-        # outcome_prediction 存的是纯数字，如 "56.5"
+        executive_summary = latest.summary or ""
+        
+        # outcome_prediction 存的是纯数字，如 "0.56"
         if latest.outcome_prediction:
             try:
                 adjusted_probability = float(latest.outcome_prediction)
             except ValueError:
                 adjusted_probability = None
+        
         # 解析 raw_analysis 获取每个 market 的 AI 概率
         if latest.raw_analysis:
             try:
@@ -152,6 +154,39 @@ def _build_card_data(card: EventCard, snapshot: Optional[EventSnapshot] = None, 
                 ai_markets = json.loads(latest.raw_analysis)
             except (json.JSONDecodeError, TypeError):
                 ai_markets = {}
+        
+        # 拼接 aILogicSummary：executive_summary + 各市场的 forensic reasoning
+        summary_parts = [executive_summary] if executive_summary else []
+        
+        for market_id, market_data in ai_markets.items():
+            if not market_data.get("_analyzed"):
+                continue
+            question = market_data.get("question", f"Market {market_id}")
+            odds = market_data.get("ai_calibrated_odds")
+            confidence = market_data.get("ai_confidence")
+            anchor = market_data.get("structural_anchor")
+            noise = market_data.get("noise")
+            barrier = market_data.get("barrier")
+            blindspot = market_data.get("blindspot")
+            
+            # 构建单个市场的分析文本
+            market_summary = f"\n\n📊 {question}"
+            if odds is not None:
+                market_summary += f"\n• AI Odds: {odds*100:.1f}%"
+            if confidence is not None:
+                market_summary += f" (Confidence: {confidence}/10)"
+            if anchor:
+                market_summary += f"\n• Anchor: {anchor}"
+            if noise:
+                market_summary += f"\n• Noise: {noise}"
+            if barrier:
+                market_summary += f"\n• Barrier: {barrier}"
+            if blindspot:
+                market_summary += f"\n• Blindspot: {blindspot}"
+            
+            summary_parts.append(market_summary)
+        
+        ai_logic_summary = "".join(summary_parts) if summary_parts else None
     
     # 基础字段从 EventCard 获取，但优先使用 raw_data 中的最新值
     # 修复：icon 字段映射 - 使用 validation_alias，所以这里用 image_url

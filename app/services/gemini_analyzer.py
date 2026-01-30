@@ -171,19 +171,37 @@ class GeminiAnalyzer:
         For each market provided in the input, generate a separate analysis block:
         Market: [Market Question]
         - AI Calibrated Odds: [Your %] 
-        - The Structural Anchor: [One sentence explaining the primary hard-data constraint for this specific market.] 
+        - The Structural Anchor: [One sentence explaining the primary hard-data constraint for this specific market.]
+        - Forensic Reasoning (Deep Dive):
+            - The Noise: [What sentiment/hype is driving the current price?]
+            - The Barrier: [Details on the specific regulatory or logical hurdle found during research.]
+            - The Blindspot: [Explicit critique of why the current volume/price is misjudging the resolution criteria.]
+            - Confidence Score: [1-10, 10 being the highest confidence]
 
         OUTPUT FORMAT (Strict JSON):
         {{
             "executive_summary": "string",
             "markets": {{
                 "MARKET_ID_1": {{
-                    "ai_calibrated_odds": 0.65, 
-                }}, "MARKET_ID_2": {{
-                    "ai_calibrated_odds": 0.35,
-                }}, "MARKET_ID_3": {{
-                    "ai_calibrated_odds": 0.0,
+                    "ai_calibrated_odds": 0.65,
+                    "confidence_score": 8,
+                    "analysis": {{
+                        "structural_anchor": "string",
+                        "noise": "string",
+                        "barrier": "string",
+                        "blindspot": "string"
+                    }}
                 }},
+                "MARKET_ID_2": {{
+                    "ai_calibrated_odds": 0.35,
+                    "confidence_score": 7,
+                    "analysis": {{
+                        "structural_anchor": "string",
+                        "noise": "string",
+                        "barrier": "string",
+                        "blindspot": "string"
+                    }}
+                }}
             }}
         }}
         """
