@@ -316,16 +316,20 @@ class GeminiAnalyzer:
         
         Args:
             gemini_result: Gemini API 返回的原始结果
-            original_markets: 原始市场列表（包含未进入 AI 分析池的市场）
+            original_markets: 原始市场列表（必须提供，用于归一化计算）
             
         Returns:
             适合存入 AIPrediction.raw_analysis 的格式（确保所有 Market ID 都有返回）
         """
+        # 防御性检查：original_markets 必须提供
+        if original_markets is None:
+            logger.error("CRITICAL: original_markets must be provided for normalization!")
+            return {}
+        
         if not gemini_result:
             return {}
         
         ai_markets = gemini_result.get("markets", {})
-        original_markets = original_markets or []
         
         # === 全链路标准化：所有概率存储为 0.0-1.0 小数格式 ===
         
