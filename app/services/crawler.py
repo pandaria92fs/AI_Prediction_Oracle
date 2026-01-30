@@ -306,10 +306,9 @@ class PolymarketCrawler:
                             odds = float(mdata.get("ai_calibrated_odds", 0))
                             primary_prediction = f"{odds:.4f}"
 
-                    raw_analysis = ai_analyzer.transform_to_raw_analysis(ai_result)
-                    
-                    # 回填原始数据
+                    # 回填原始数据 (需要传入 original_markets 用于归一化)
                     all_original_markets = event.get("markets", [])
+                    raw_analysis = ai_analyzer.transform_to_raw_analysis(ai_result, all_original_markets)
                     for market in all_original_markets:
                         m_id = str(market.get("id", ""))
                         if m_id in raw_analysis:

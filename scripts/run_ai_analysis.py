@@ -103,11 +103,12 @@ async def process_batch(limit: int = 5):
                     odds = float(mdata.get("ai_calibrated_odds", 0))
                     primary_prediction = f"{odds:.4f}"
 
-            # 4. 转换为存储格式
-            raw_analysis = ai_analyzer.transform_to_raw_analysis(ai_result)
+            # 4. 转换为存储格式 (传入 original_markets 用于归一化)
+            original_markets = event_data["markets"]
+            raw_analysis = ai_analyzer.transform_to_raw_analysis(ai_result, original_markets)
             
             # 补充原始数据
-            for market in event_data["markets"]:
+            for market in original_markets:
                 market_id = str(market.get("id", ""))
                 if market_id in raw_analysis:
                     raw_analysis[market_id]["question"] = market.get("question", "")
